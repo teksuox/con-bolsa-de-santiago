@@ -1,0 +1,1360 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { X, Bell } from 'lucide-react';
+import Header from './components/Header';
+import MyPortfolio from './components/MyPortfolio';
+import MarketWatch from './components/MarketWatch';
+import DividendTracker from './components/DividendTracker';
+import TaxRefunds from './components/TaxRefunds';
+import ChartsAndAnalytics from './components/ChartsAndAnalytics';
+import SupabaseSync from './components/SupabaseSync';
+import HistoryPage from './components/HistoryPage';
+import InvestmentPlan from './components/InvestmentPlan';
+import { supabase } from './lib/supabase';
+import { supabaseService } from './lib/supabaseService';
+import { subscribeToChanges } from './lib/supabaseRealtime';
+import { DBBackupData, portafolioDB } from './db';
+
+import { StockHolding, DividendPayment, TaxRefund, MarketStock, StockAlert } from './types';
+import { normalizeTicker } from './utils';
+
+function dedupeCustomStocks(stocks: MarketStock[]): MarketStock[] {
+  const seen = new Set<string>();
+  return stocks
+    .filter(cs => cs && cs.ticker)
+    .map(cs => ({ ...cs, ticker: normalizeTicker(cs.ticker) }))
+    .filter(cs => {
+      if (seen.has(cs.ticker)) return false;
+      seen.add(cs.ticker);
+      return true;
+    });
+}
+
+export default function App() {
+  // Auto-session restore from Supabase (handled by SDK via localStorage)
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // States initialized as empty arrays
+  const [holdings, setHoldings] = useState<StockHolding[]>([]);
+  const [dividends, setDividends] = useState<DividendPayment[]>([]);
+  const [refunds, setRefunds] = useState<TaxRefund[]>([]);
+  const [annualPerformancePercent, setAnnualPerformancePercent] = useState<number>(8.5);
+
+  // Master market reference rates — only stocks the user explicitly searched for
+  const [marketStocks, setMarketStocks] = useState<MarketStock[]>(() => {
+    try {
+      const saved = localStorage.getItem('custom_searched_stocks');
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return dedupeCustomStocks(parsed);
+      }
+    } catch (e) {
+      console.warn('Error reading custom_searched_stocks:', e);
+    }
+    return [];
+  });
+  // Tracks which tickers the user explicitly searched for (for MarketWatch filter)
+  const [searchedTickers, setSearchedTickers] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('custom_searched_stocks');
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return new Set(parsed.map((s: MarketStock) => normalizeTicker(s.ticker)));
+      }
+    } catch {}
+    return new Set();
+  });
+  const [isSyncingDividends, setIsSyncingDividends] = useState<boolean>(false);
+
+  // Price alerts and voice/audio notifications state
+  const [alerts, setAlerts] = useState<StockAlert[]>([]);
+
+  const [firedNotificationMessages, setFiredNotificationMessages] = useState<{ id: string; ticker: string; message: string }[]>([]);
+
+  // Sync alerts state to IndexedDB
+  useEffect(() => {
+    for (const a of alerts) {
+      portafolioDB.saveAlert(a);
+    }
+  }, [alerts]);
+
+  // Synthesized double-pitch notification chime
+  const playAlertSound = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const now = ctx.currentTime;
+
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(523.25, now);
+      osc1.frequency.exponentialRampToValueAtTime(783.99, now + 0.15);
+
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(392.00, now);
+      osc2.frequency.exponentialRampToValueAtTime(1046.50, now + 0.18);
+
+      gainNode.gain.setValueAtTime(0.15, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
+
+      osc1.connect(gainNode);
+      osc2.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      osc1.start(now);
+      osc1.stop(now + 1.2);
+      osc2.start(now);
+      osc2.stop(now + 1.2);
+    } catch (_e) {
+      // Web Audio not available
+    }
+  };
+
+  // Real-time auto-refresh trackers (persisted across refreshes)
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(() => {
+    const stored = localStorage.getItem('lastRefreshed');
+    if (stored) {
+      const parsed = new Date(stored);
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+    return new Date();
+  });
+  const [nextRefreshTime, setNextRefreshTime] = useState<number>(() => {
+    const stored = localStorage.getItem('nextRefreshTime');
+    if (stored) {
+      const parsed = parseInt(stored, 10);
+      if (!isNaN(parsed) && parsed > Date.now()) return parsed;
+    }
+    return Date.now() + 180000;
+  });
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [investmentPlanRefreshKey, setInvestmentPlanRefreshKey] = useState(0);
+
+  // Ref for background refresh to always use latest holdings (avoids stale closure)
+  const holdingsRef = useRef(holdings);
+  holdingsRef.current = holdings;
+
+  // Ref for searched tickers (so refresh closure reads latest value)
+  const searchedTickersRef = useRef(searchedTickers);
+  searchedTickersRef.current = searchedTickers;
+
+  const refreshFnRef = useRef<((silent: boolean) => Promise<void>) | null>(null);
+
+  // Prevents alert triggers from firing on fallback/initial data before first real API fetch
+  const marketDataLoadedRef = useRef(false);
+
+  // Stocks manually hidden from the market overview
+  const [deletedStocks, setDeletedStocks] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('deleted_market_stocks');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('deleted_market_stocks', JSON.stringify(deletedStocks));
+  }, [deletedStocks]);
+
+  // Check alert triggers after each auto-refresh completes
+  useEffect(() => {
+    if (!marketDataLoadedRef.current || alerts.length === 0) return;
+    const updatedAlerts = alerts.map(alert => {
+      if (alert.triggered) return alert;
+      const stock = marketStocks.find(s => s.ticker === alert.ticker);
+      if (!stock) return alert;
+      if (stock.price <= alert.targetPrice) {
+        return { ...alert, triggered: true };
+      }
+      return alert;
+    });
+    const triggered = updatedAlerts.filter(a => a.triggered && !alerts.find(oa => oa.ticker === a.ticker)?.triggered);
+    if (triggered.length > 0) {
+      const newMessages = triggered.map(t => ({
+        id: `${t.ticker}-${Date.now()}-${Math.random()}`,
+        ticker: t.ticker,
+        message: `La acción chilena ${t.ticker} ha caído bajo el precio límite de ${t.targetPrice.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' })}. ¡Precio actual: ${(marketStocks.find(s => s.ticker === t.ticker)?.price || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP' })}!`
+      }));
+      if (newMessages.length > 0) {
+        playAlertSound();
+        setFiredNotificationMessages(prev => [...prev, ...newMessages]);
+      }
+    }
+    setAlerts(updatedAlerts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastRefreshed]);
+
+  // Synchronize stock rates and indicator data in the background from Yahoo Finance
+  const handleRefreshMarketData = async (silent: boolean = false) => {
+    if (!silent) setIsRefreshing(true);
+    try {
+      // Collect additional tickers to fetch
+      const additionalTickersSet = new Set<string>();
+      
+      // Load custom searched ones
+      try {
+        const saved = localStorage.getItem('custom_searched_stocks');
+        const parsed = saved ? JSON.parse(saved) : [];
+        if (Array.isArray(parsed)) {
+          parsed.forEach((s: any) => {
+            if (s && s.ticker) additionalTickersSet.add(s.ticker.toUpperCase());
+          });
+        }
+      } catch (e) {
+        console.warn('Error reading custom searched tickers in refresh:', e);
+      }
+
+      // Load owned ones
+      const currentHoldings = holdingsRef.current;
+      currentHoldings.forEach(h => {
+        if (h && h.ticker) additionalTickersSet.add(h.ticker.toUpperCase());
+      });
+
+      const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "VAPORES", "BSANTANDER", "CMPC", "FALABELLA", "ANDINA-B"];
+      const additionalList = Array.from(additionalTickersSet)
+        .filter(t => !standardTickers.includes(t));
+
+      const queryUrl = additionalList.length > 0
+        ? `/api/market-stocks?additional=${encodeURIComponent(additionalList.join(','))}`
+        : '/api/market-stocks';
+
+      const marketResponse = await fetch(queryUrl);
+      if (marketResponse.ok) {
+        const quotes = await marketResponse.json();
+        if (quotes && quotes.length > 0) {
+          const normalizedQuotes = quotes.map((q: any) => ({ ...q, ticker: normalizeTicker(q.ticker) }));
+          // 1. Update Market reference list (all fetched quotes for pricing, but only user-searched ones for display)
+          setMarketStocks(prev => {
+            // Merge all fetched quotes into marketStocks so pricing/P&L works for owned stocks too
+            const customStocks = prev.filter(p => !normalizedQuotes.some((q: any) => q.ticker === normalizeTicker(p.ticker)));
+            const updatedList = [...normalizedQuotes, ...customStocks];
+            
+            // Only persist searched tickers to localStorage
+            const searched = searchedTickersRef.current;
+            const finalCustomSavedList = updatedList.filter(s => searched.has(s.ticker));
+            if (finalCustomSavedList.length > 0) {
+              try {
+                localStorage.setItem('custom_searched_stocks', JSON.stringify(finalCustomSavedList));
+              } catch (e) {
+                console.warn('Error saving updated custom_searched_stocks:', e);
+              }
+
+              // Sync to IndexedDB for complete persistence/cloud backup
+              for (const s of finalCustomSavedList) {
+                portafolioDB.saveCustomStock(s).catch(err => console.error('Error auto-syncing custom stock to DB during refresh:', err));
+              }
+            }
+            return updatedList;
+          });
+
+          // 2. Refresh active holdings pricing (skip manually edited prices)
+          setHoldings(prev => {
+            return prev.map(h => {
+              if (h.manualPrice) return h;
+              const quote = normalizedQuotes.find((q: any) => q.ticker === normalizeTicker(h.ticker));
+              if (!quote) return h;
+              const updated = {
+                ...h,
+                currentPrice: quote.price || h.currentPrice
+              };
+              portafolioDB.saveHolding(updated); // Save updated price to IndexedDB
+              return updated;
+            });
+          });
+          setLastRefreshed(new Date());
+          setNextRefreshTime(Date.now() + 180000);
+          setRefreshError(null);
+          marketDataLoadedRef.current = true;
+
+            // Save daily snapshot for ProfitHistory
+            const snapshotValue = currentHoldings.reduce((sum, h) => {
+              if (h.manualPrice) return sum + h.shares * h.currentPrice;
+              const quote = normalizedQuotes.find((q: any) => q.ticker === normalizeTicker(h.ticker));
+              return sum + h.shares * (quote?.price || h.currentPrice);
+            }, 0);
+            const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+            portafolioDB.saveDailySnapshot({ date: todayStr, portfolioValue: Math.round(snapshotValue) });
+
+            // Backfill missing historical data (run once per day max)
+            const lastBackfillKey = 'lastHistoryBackfill';
+            const lastBackfill = localStorage.getItem(lastBackfillKey);
+            const todayBackfill = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+            if (lastBackfill !== todayBackfill) {
+              localStorage.setItem(lastBackfillKey, todayBackfill);
+              // Fire-and-forget: get latest saved date and backfill if gap exists
+              portafolioDB.getLatestMonthlyPnLDate().then(lastSavedDate => {
+                if (lastSavedDate) {
+                  const yesterday = new Date();
+                  yesterday.setDate(yesterday.getDate() - 1);
+                  const yesterdayStr = yesterday.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+                  if (lastSavedDate < yesterdayStr) {
+                    const tickers = currentHoldings.map(h => h.ticker).filter(Boolean);
+                    if (tickers.length > 0) {
+                      fetch('/api/backfill-history', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tickers, lastSavedDate })
+                      }).catch(() => {}); // silent
+                    }
+                  }
+                }
+              }).catch(() => {});
+            }
+          } else {
+          setRefreshError('La API respondió vacía. Los precios pueden estar desactualizados.');
+          setNextRefreshTime(Date.now() + 180000);
+        }
+      } else {
+        setRefreshError('Error al conectar con la API de mercado. Los precios pueden estar desactualizados.');
+        setNextRefreshTime(Date.now() + 180000);
+      }
+    } catch (err) {
+      console.warn('Error fetching live background updates:', err);
+      setRefreshError('Error de red al actualizar precios. Los precios pueden estar desactualizados.');
+      setNextRefreshTime(Date.now() + 180000);
+    } finally {
+      if (!silent) setIsRefreshing(false);
+    }
+  };
+
+  // Persist lastRefreshed to localStorage on every change
+  useEffect(() => {
+    localStorage.setItem('lastRefreshed', lastRefreshed.toISOString());
+  }, [lastRefreshed]);
+
+  // Persist nextRefreshTime to localStorage on every change
+  useEffect(() => {
+    localStorage.setItem('nextRefreshTime', String(nextRefreshTime));
+  }, [nextRefreshTime]);
+
+  // Keep ref updated with latest refresh function
+  refreshFnRef.current = handleRefreshMarketData;
+
+  // Setup periodic polling interval (automatic sync every 3 minutes)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshFnRef.current?.(true); // Silent background refresh
+    }, 180000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Synchronize dividends from Chile corporate actions (Yahoo F.) based on holdings
+  const handleSyncDividends = async (overrideHoldings?: StockHolding[]) => {
+    const listToSync = overrideHoldings || holdings;
+    if (listToSync.length === 0) return;
+
+    setIsSyncingDividends(true);
+    try {
+      const response = await fetch('/api/sync-dividends', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          holdings: listToSync.map(h => ({
+            ticker: h.ticker,
+            buyDate: h.buyDate,
+            shares: h.shares
+          }))
+        })
+      });
+
+      if (response.ok) {
+        const synced: DividendPayment[] = await response.json();
+        if (synced && synced.length > 0) {
+          // Merge with current state dividends to preserve any existing user entries
+          setDividends(prev => {
+            const manuals = prev.filter(d => !d.id.startsWith('div-sys-'));
+            const sysKeys = new Set(synced.map(s => `${s.ticker}-${s.payoutDate}-${s.cutoffDate || ''}`));
+            
+            // Remove manual records of the same ticker/date to avoid duplication
+            const filteredManuals = manuals.filter(m => !sysKeys.has(`${m.ticker}-${m.payoutDate}-${m.cutoffDate || ''}`));
+            const merged = [...synced, ...filteredManuals];
+            
+            // Save to IndexedDB
+            synced.forEach(s => {
+              portafolioDB.saveDividend(s);
+            });
+            return merged;
+          });
+        } else {
+          console.warn('No se encontraron dividendos nuevos para tus acciones.');
+        }
+      } else {
+        const errData = await response.text().catch(() => '');
+        console.error(`Sync dividends error (${response.status}): ${errData}`);
+      }
+    } catch (err) {
+      console.error('Error sincronizando dividendos desde bolsa:', err);
+    } finally {
+      setIsSyncingDividends(false);
+    }
+  };
+
+  // Sync state from IndexedDB on initial mount
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [storedHoldings, storedDividends, storedRefunds, storedYield, storedCustomStocks, storedAlerts] = await Promise.all([
+          portafolioDB.getHoldings(),
+          portafolioDB.getDividends(),
+          portafolioDB.getRefunds(),
+          portafolioDB.getAnnualYield(),
+          portafolioDB.getCustomStocks(),
+          portafolioDB.getAlerts()
+        ]);
+
+        setHoldings(storedHoldings);
+        setDividends(storedDividends);
+        setRefunds(storedRefunds);
+        setAnnualPerformancePercent(storedYield);
+        if (storedAlerts.length > 0) setAlerts(storedAlerts);
+
+        if (storedCustomStocks) {
+          const customOnly = dedupeCustomStocks(storedCustomStocks);
+          setMarketStocks(customOnly);
+          const tickerSet = new Set(customOnly.map(s => normalizeTicker(s.ticker)));
+          setSearchedTickers(tickerSet);
+          try {
+            localStorage.setItem('custom_searched_stocks', JSON.stringify(customOnly));
+          } catch (e) {
+            console.warn('Error saving custom stocks to localstorage on mount:', e);
+          }
+        // Clean up duplicate entries in IndexedDB (e.g. "QUIÑENCO" → "QUINENCO")
+        const keptTickers = new Set(customOnly.map(s => s.ticker));
+        for (const old of storedCustomStocks) {
+          const normalized = normalizeTicker(old.ticker);
+          if (keptTickers.has(normalized) && normalized !== old.ticker) {
+            portafolioDB.deleteCustomStock(old.ticker).catch(() => {});
+          }
+        }
+      }
+
+      // 1. Load cached market stocks from Supabase INSTANT (no Yahoo fetch)
+      try {
+        const cacheResp = await fetch('/api/market-stocks-cache');
+        if (cacheResp.ok) {
+          const cacheData = await cacheResp.json();
+          if (cacheData.data && Array.isArray(cacheData.data) && cacheData.data.length > 0) {
+            const normalizedCached = cacheData.data.map((q: any) => ({ ...q, ticker: normalizeTicker(q.ticker) }));
+            // Merge with custom stocks from IndexedDB
+            setMarketStocks(prev => {
+              const customStocks = prev.filter(p => !normalizedCached.some((q: any) => q.ticker === normalizeTicker(p.ticker)));
+              return [...normalizedCached, ...customStocks];
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Error loading market stocks cache:', e);
+      }
+
+      // 2. Fetch real-time market stock prices in BACKGROUND (including custom searched ones and ones from personal holdings!)
+        try {
+          const additionalTickersSet = new Set<string>();
+          
+          if (storedCustomStocks && storedCustomStocks.length > 0) {
+            storedCustomStocks.forEach(s => {
+              if (s && s.ticker) additionalTickersSet.add(normalizeTicker(s.ticker));
+            });
+          }
+          
+          // Load custom searched ones (fallback and legacy compatibility)
+          try {
+            const saved = localStorage.getItem('custom_searched_stocks');
+            const parsed = saved ? JSON.parse(saved) : [];
+            if (Array.isArray(parsed)) {
+              parsed.forEach((s: any) => {
+                if (s && s.ticker) additionalTickersSet.add(normalizeTicker(s.ticker));
+              });
+            }
+          } catch (e) {
+            console.warn('Error reading custom searched tickers on mount:', e);
+          }
+
+          // Load owned ones from db
+          storedHoldings.forEach(h => {
+            if (h && h.ticker) additionalTickersSet.add(normalizeTicker(h.ticker));
+          });
+
+          const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "VAPORES", "BSANTANDER", "CMPC", "FALABELLA", "ANDINA-B"];
+          const additionalList = Array.from(additionalTickersSet)
+            .filter(t => !standardTickers.includes(t));
+
+          const queryUrl = additionalList.length > 0
+            ? `/api/market-stocks?additional=${encodeURIComponent(additionalList.join(','))}`
+            : '/api/market-stocks';
+
+          const marketResponse = await fetch(queryUrl);
+          if (marketResponse.ok) {
+            const quotes = await marketResponse.json();
+            if (quotes && quotes.length > 0) {
+              const normalizedQuotes = quotes.map((q: any) => ({ ...q, ticker: normalizeTicker(q.ticker) }));
+              // 1. Update Market reference list (all quotes for pricing, only searched ones persist)
+              setMarketStocks(prev => {
+                const customStocks = prev.filter(p => !normalizedQuotes.some((q: any) => q.ticker === normalizeTicker(p.ticker)));
+                const updatedList = [...normalizedQuotes, ...customStocks];
+                
+                // Only persist searched tickers from localStorage
+                const saved = localStorage.getItem('custom_searched_stocks');
+                let searched = new Set<string>();
+                if (saved) {
+                  try {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed)) {
+                      searched = new Set(parsed.map((s: any) => normalizeTicker(s.ticker)));
+                    }
+                  } catch {}
+                }
+                const finalCustomSavedList = updatedList.filter(s => searched.has(s.ticker));
+                if (finalCustomSavedList.length > 0) {
+                  try {
+                    localStorage.setItem('custom_searched_stocks', JSON.stringify(finalCustomSavedList));
+                  } catch (e) {
+                    console.warn('Error saving updated custom_searched_stocks:', e);
+                  }
+                  
+                  // Save custom stocks in IndexedDB as well (normalized, no duplicates)
+                  const seen = new Set<string>();
+                  for (const s of finalCustomSavedList) {
+                    const normalized = { ...s, ticker: normalizeTicker(s.ticker) };
+                    if (!seen.has(normalized.ticker)) {
+                      seen.add(normalized.ticker);
+                      portafolioDB.saveCustomStock(normalized).catch(err => console.error('Error auto-syncing custom stock to DB on mount:', err));
+                    }
+                  }
+                }
+                return updatedList;
+              });
+
+              // 2. Refresh active holdings pricing (skip manually edited prices)
+              setHoldings(prev => {
+                return prev.map(h => {
+                  if (h.manualPrice) return h;
+                  const quote = normalizedQuotes.find((q: any) => q.ticker === normalizeTicker(h.ticker));
+                  if (!quote) return h;
+                  const updated = {
+                    ...h,
+                    currentPrice: quote.price || h.currentPrice
+                  };
+                  portafolioDB.saveHolding(updated); // Save updated price
+                  return updated;
+                });
+              });
+              marketDataLoadedRef.current = true;
+            }
+          }
+        } catch (apiErr) {
+          console.warn('Could not fetch live stock quotes, using local cache:', apiErr);
+        }
+
+        // Auto trigger background sync for dividends if user has holdings and no dividends exist
+        if (storedHoldings.length > 0 && storedDividends.length === 0) {
+          // Fire direct sync
+          const response = await fetch('/api/sync-dividends', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              holdings: storedHoldings.map(h => ({
+                ticker: h.ticker,
+                buyDate: h.buyDate,
+                shares: h.shares
+              }))
+            })
+          });
+          if (response.ok) {
+            const synced = await response.json();
+            if (Array.isArray(synced) && synced.length > 0) {
+              setDividends(synced);
+              synced.forEach((s: any) => portafolioDB.saveDividend(s));
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error cargando base de datos local:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  // Listen to Supabase Auth
+  const [supabaseUser, setSupabaseUser] = useState<any>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSupabaseUser(session?.user ?? null);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSupabaseUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Auto-sync from Supabase on mount (incremental per-entity)
+  useEffect(() => {
+    if (!supabaseUser || isLoading) return;
+
+    const pullFromCloud = async () => {
+      try {
+        const cloud = await supabaseService.pullAll();
+        let changed = false;
+
+        // Merge holdings: Supabase wins if newer
+        for (const ch of cloud.holdings) {
+          const local = holdings.find(h => h.id === ch.id);
+          if (!local || (local.updatedAt || '') < (ch.updatedAt || '')) {
+            await portafolioDB.saveHolding(ch);
+            changed = true;
+          }
+        }
+        // Merge dividends
+        for (const cd of cloud.dividends) {
+          const local = dividends.find(d => d.id === cd.id);
+          if (!local || (local.updatedAt || '') < (cd.updatedAt || '')) {
+            await portafolioDB.saveDividend(cd);
+            changed = true;
+          }
+        }
+        // Merge refunds
+        for (const cr of cloud.refunds) {
+          const local = refunds.find(r => r.id === cr.id);
+          if (!local || (local.updatedAt || '') < (cr.updatedAt || '')) {
+            await portafolioDB.saveRefund(cr);
+            changed = true;
+          }
+        }
+        // Merge alerts
+        for (const ca of cloud.alerts) {
+          const local = alerts.find(a => a.ticker === ca.ticker);
+          if (!local || (local.updatedAt || '') < (ca.updatedAt || '')) {
+            await portafolioDB.saveAlert(ca);
+            changed = true;
+          }
+        }
+        // Merge custom stocks
+        for (const cs of cloud.customStocks) {
+          await portafolioDB.saveCustomStock(cs);
+        }
+        // Update settings
+        if (cloud.settings && cloud.settings.annualPerformancePercent) {
+          await portafolioDB.saveAnnualYield(cloud.settings.annualPerformancePercent);
+          changed = true;
+        }
+        // Update investment plan
+        if (cloud.investmentPlan) {
+          await portafolioDB.saveInvestmentPlan(cloud.investmentPlan);
+          changed = true;
+        }
+
+        if (changed) {
+          // Reload full state from IndexedDB
+          const [h, d, r, y, c] = await Promise.all([
+            portafolioDB.getHoldings(),
+            portafolioDB.getDividends(),
+            portafolioDB.getRefunds(),
+            portafolioDB.getAnnualYield(),
+            portafolioDB.getAlerts()
+          ]);
+          setHoldings(h);
+          setDividends(d);
+          setRefunds(r);
+          setAnnualPerformancePercent(y);
+          setAlerts(c);
+          const customStocks = await portafolioDB.getCustomStocks();
+          if (customStocks.length > 0) {
+            const deduped = dedupeCustomStocks(customStocks);
+            setMarketStocks(deduped);
+            setSearchedTickers(new Set(deduped.map(s => normalizeTicker(s.ticker))));
+          }
+        }
+      } catch (e) {
+        console.warn('Auto-sync pull error:', e);
+      }
+    };
+
+    const timer = setTimeout(pullFromCloud, 1500);
+    return () => clearTimeout(timer);
+    // Only run on mount when user becomes available
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabaseUser, isLoading]);
+
+  // Realtime subscriptions (live sync from Supabase)
+  const unsubscribeRealtimeRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!supabaseUser) {
+      unsubscribeRealtimeRef.current?.();
+      unsubscribeRealtimeRef.current = null;
+      return;
+    }
+
+    const cleanup = subscribeToChanges(supabaseUser.id, {
+      onHoldingsChanged: (data) => { setHoldings(data); },
+      onDividendsChanged: (data) => { setDividends(data); },
+      onRefundsChanged: (data) => { setRefunds(data); },
+      onAlertsChanged: (data) => { setAlerts(data); },
+      onCustomStocksChanged: (data) => {
+        const deduped = dedupeCustomStocks(data);
+        setMarketStocks(deduped);
+        setSearchedTickers(new Set(deduped.map(s => normalizeTicker(s.ticker))));
+      },
+      onSettingsChanged: async () => {
+        setAnnualPerformancePercent(await portafolioDB.getAnnualYield());
+      },
+      onInvestmentPlanChanged: () => {
+        setInvestmentPlanRefreshKey(k => k + 1);
+      }
+    });
+    unsubscribeRealtimeRef.current = cleanup;
+
+    return () => {
+      cleanup();
+      unsubscribeRealtimeRef.current = null;
+    };
+  }, [supabaseUser]);
+
+  // Handlers for Portfolio
+  const handleAddHolding = async (newHolding: Omit<StockHolding, 'id'>) => {
+    const normalizedTicker = normalizeTicker(newHolding.ticker);
+    const id = `h-${Date.now()}`;
+    const holding: StockHolding = { ...newHolding, id, ticker: normalizedTicker };
+
+    // Always add to searched tickers so it appears in Bolsa de Santiago
+    setSearchedTickers(prev => new Set(prev).add(normalizedTicker));
+    
+    // Ensure the ticker is in custom_searched_stocks for persistence
+    const parsedStock: MarketStock = {
+      ticker: normalizedTicker,
+      name: newHolding.name || `${normalizedTicker} S.A.`,
+      price: newHolding.buyPrice,
+      changePercent: 0,
+      dividendYield: newHolding.annualTargetYield || 6.0,
+      sector: 'Portafolio Personal',
+      volumeCLP: 1000000
+    };
+
+    try {
+      const saved = localStorage.getItem('custom_searched_stocks');
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (!parsed.some((s: MarketStock) => normalizeTicker(s.ticker) === normalizedTicker)) {
+        parsed.push(parsedStock);
+        localStorage.setItem('custom_searched_stocks', JSON.stringify(parsed));
+      }
+    } catch (e) {
+      console.error('Error auto-persisting holding ticker as custom searched stock:', e);
+    }
+
+    // Save custom stock in IndexedDB as well
+    portafolioDB.saveCustomStock(parsedStock).catch(err => console.error('Error auto-persisting custom stock to IndexedDB:', err));
+
+    setMarketStocks(prev => {
+      if (prev.some(s => normalizeTicker(s.ticker) === normalizedTicker)) return prev;
+      return [...prev, parsedStock];
+    });
+
+    // Optimistic UI state update
+    const updatedHoldings = [...holdings, holding];
+    setHoldings(updatedHoldings);
+    await portafolioDB.saveHolding(holding);
+    // Sync to Supabase per-record
+    supabaseService.syncHolding(holding).catch(e => console.warn('sync addHolding:', e));
+
+    // Auto sync actual dividends from the exchange!
+    await handleSyncDividends(updatedHoldings);
+  };
+
+  const handleUpdateHoldingPrice = async (id: string, newPrice: number) => {
+    let targetHolding: StockHolding | null = null;
+    
+    setHoldings(prev => prev.map(h => {
+      if (h.id === id) {
+        targetHolding = { ...h, currentPrice: newPrice, manualPrice: true };
+        return targetHolding;
+      }
+      return h;
+    }));
+
+    if (targetHolding) {
+      await portafolioDB.saveHolding({ ...targetHolding, manualPrice: true });
+      supabaseService.syncHolding({ ...targetHolding, manualPrice: true }).catch(e => console.warn('sync updatePrice:', e));
+      
+      // Update corresponding reference price in market stock list
+      setMarketStocks(prev => prev.map(m => {
+        if (m.ticker === (targetHolding as any).ticker) {
+          return { ...m, price: newPrice };
+        }
+        return m;
+      }));
+    }
+  };
+
+  const handleResetManualPrice = async (id: string) => {
+    setHoldings(prev => prev.map(h => {
+      if (h.id === id) {
+        const updated = { ...h, manualPrice: false };
+        portafolioDB.saveHolding(updated);
+        supabaseService.syncHolding(updated).catch(e => console.warn('sync resetManual:', e));
+        return updated;
+      }
+      return h;
+    }));
+  };
+
+  const handleUpdateHoldingYield = async (id: string, newYield: number) => {
+    let targetHolding: StockHolding | null = null;
+    
+    setHoldings(prev => prev.map(h => {
+      if (h.id === id) {
+        targetHolding = { ...h, annualTargetYield: newYield };
+        return targetHolding;
+      }
+      return h;
+    }));
+
+    if (targetHolding) {
+      await portafolioDB.saveHolding(targetHolding);
+      supabaseService.syncHolding(targetHolding).catch(e => console.warn('sync updateYield:', e));
+    }
+  };
+
+  const handleDeleteHolding = async (id: string) => {
+    // First delete from IndexedDB
+    await portafolioDB.deleteHolding(id);
+    // Then update state
+    setHoldings(prev => prev.filter(h => h.id !== id));
+    // Sync delete to Supabase per-record
+    supabaseService.deleteHolding(id).catch(e => console.warn('sync deleteHolding:', e));
+  };
+
+  // Handlers for Dividends
+  const handleAddDividend = async (newDiv: Omit<DividendPayment, 'id'>) => {
+    const id = `div-${Date.now()}`;
+    const div: DividendPayment = { ...newDiv, id };
+    
+    setDividends(prev => [div, ...prev]);
+    await portafolioDB.saveDividend(div);
+    supabaseService.syncDividend(div).catch(e => console.warn('sync addDividend:', e));
+  };
+
+  const handleUpdateDividend = async (id: string, updates: Partial<DividendPayment>) => {
+    let updated: DividendPayment | null = null;
+    setDividends(prev => prev.map(d => {
+      if (d.id === id) {
+        const amtPerShare = updates.amountPerShare ?? d.amountPerShare;
+        // If editing a synced dividend, change its id so "Recuperar fechas" won't overwrite it
+        const newId = d.id.startsWith('div-sys-') ? `div-${Date.now()}` : d.id;
+        updated = { ...d, ...updates, id: newId, totalAmount: d.sharesCount * amtPerShare };
+        return updated;
+      }
+      return d;
+    }));
+    if (updated) {
+      // Remove old key from IndexedDB if id changed
+      if (id !== updated.id) {
+        await portafolioDB.deleteDividend(id);
+        supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
+      }
+      await portafolioDB.saveDividend(updated);
+      supabaseService.syncDividend(updated).catch(e => console.warn('sync updateDividend:', e));
+    }
+  };
+
+  const handleToggleReceived = async (id: string) => {
+    let targetDiv: DividendPayment | null = null;
+    
+    setDividends(prev => prev.map(d => {
+      if (d.id === id) {
+        // If toggling a synced dividend, change its id so sync won't overwrite it
+        const newId = d.id.startsWith('div-sys-') ? `div-${Date.now()}` : d.id;
+        targetDiv = { ...d, id: newId, received: !d.received };
+        return targetDiv;
+      }
+      return d;
+    }));
+
+    if (targetDiv) {
+      // Remove old key from IndexedDB if id changed
+      if (id !== targetDiv.id) {
+        await portafolioDB.deleteDividend(id);
+        supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
+      }
+      await portafolioDB.saveDividend(targetDiv);
+      supabaseService.syncDividend(targetDiv).catch(e => console.warn('sync toggleReceived:', e));
+    }
+  };
+
+  const handleDeleteDividend = async (id: string) => {
+    setDividends(prev => prev.filter(d => d.id !== id));
+    await portafolioDB.deleteDividend(id);
+    supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
+  };
+
+  // Handlers for Tax Refunds
+  const handleAddRefund = async (newRefund: Omit<TaxRefund, 'id'>) => {
+    const id = `tax-${Date.now()}`;
+    const ref: TaxRefund = { ...newRefund, id };
+    
+    setRefunds(prev => [ref, ...prev]);
+    await portafolioDB.saveRefund(ref);
+    supabaseService.syncRefund(ref).catch(e => console.warn('sync addRefund:', e));
+  };
+
+  const handleDeleteRefund = async (id: string) => {
+    setRefunds(prev => prev.filter(r => r.id !== id));
+    await portafolioDB.deleteRefund(id);
+    supabaseService.deleteRefund(id).catch(e => console.warn('sync deleteRefund:', e));
+  };
+
+  const handleSetAnnualPerformancePercent = async (val: number) => {
+    setAnnualPerformancePercent(val);
+    await portafolioDB.saveAnnualYield(val);
+    supabaseService.syncSettings({ annualPerformancePercent: val }).catch(e => console.warn('sync settings:', e));
+  };
+
+
+  // Backup file routines
+  const handleExportBackup = async () => {
+    try {
+      const data = await portafolioDB.exportBackup();
+      const text = JSON.stringify(data, null, 2);
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `santiago_bolsa_portafolio_backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exporting data: ', err);
+      alert('Error al descargar el archivo de respaldo.');
+    }
+  };
+
+  const handleImportBackup = async (content: string) => {
+    try {
+      const parsed = JSON.parse(content);
+      await portafolioDB.importBackup(parsed);
+      
+      // Reload states from IndexedDB
+      const storedHoldings = await portafolioDB.getHoldings();
+      const storedDividends = await portafolioDB.getDividends();
+      const storedRefunds = await portafolioDB.getRefunds();
+      const storedYield = await portafolioDB.getAnnualYield();
+      const storedCustomStocks = await portafolioDB.getCustomStocks();
+
+      setHoldings(storedHoldings);
+      setDividends(storedDividends);
+      setRefunds(storedRefunds);
+      setAnnualPerformancePercent(storedYield);
+      
+      const customOnly = dedupeCustomStocks(storedCustomStocks);
+      setMarketStocks(customOnly);
+      const tickerSet = new Set(customOnly.map(s => normalizeTicker(s.ticker)));
+      setSearchedTickers(tickerSet);
+      
+      try {
+        localStorage.setItem('custom_searched_stocks', JSON.stringify(customOnly));
+      } catch (e) {
+        console.warn('Error saving updated custom_searched_stocks on import:', e);
+      }
+    } catch (err) {
+      console.error('Error importing backup:', err);
+      throw err;
+    }
+  };
+
+  const handleClearAllData = async () => {
+    try {
+      await portafolioDB.clearAllData();
+      setHoldings([]);
+      setDividends([]);
+      setRefunds([]);
+      setAnnualPerformancePercent(8.5);
+      setMarketStocks([]);
+      setSearchedTickers(new Set());
+      try {
+        localStorage.removeItem('custom_searched_stocks');
+      } catch (e) {
+        console.warn(e);
+      }
+    } catch (err) {
+      console.error('Error clearing data:', err);
+      alert('No se pudo borrar los datos locales.');
+    }
+  };
+
+  const handleMarketQuickBuy = async (tickerCode: string) => {
+    const stock = marketStocks.find(s => s.ticker === tickerCode);
+    if (!stock) return;
+    const quickHolding: Omit<StockHolding, 'id'> = {
+      ticker: stock.ticker,
+      name: stock.name,
+      shares: 1,
+      buyPrice: stock.price,
+      currentPrice: stock.price,
+      buyDate: new Date().toISOString().split('T')[0],
+      annualTargetYield: stock.dividendYield
+    };
+    await handleAddHolding(quickHolding);
+  };
+
+  const handleToggleAlert = (ticker: string, currentPrice: number) => {
+    setAlerts(prev => {
+      const exists = prev.find(a => a.ticker === ticker);
+      if (exists) {
+        const updated = prev.filter(a => a.ticker !== ticker);
+        supabaseService.deleteAlert(ticker).catch(e => console.warn('sync deleteAlert:', e));
+        return updated;
+      }
+      const newAlert: StockAlert = { ticker, targetPrice: currentPrice * 0.95, starredPrice: currentPrice, triggered: false };
+      supabaseService.syncAlert(newAlert).catch(e => console.warn('sync addAlert:', e));
+      return [...prev, newAlert];
+    });
+  };
+
+  const handleUpdateTargetPrice = (ticker: string, targetPrice: number) => {
+    setAlerts(prev => prev.map(a => {
+      if (a.ticker === ticker) {
+        const updated = { ...a, targetPrice };
+        supabaseService.syncAlert(updated).catch(e => console.warn('sync updateTarget:', e));
+        return updated;
+      }
+      return a;
+    }));
+  };
+
+  const handleResetAlert = (ticker: string) => {
+    const stock = marketStocks.find(s => s.ticker === ticker);
+    if (!stock) return;
+    setAlerts(prev => prev.map(a => {
+      if (a.ticker === ticker) {
+        const updated = { ...a, targetPrice: stock.price * 0.95, triggered: false, starredPrice: stock.price };
+        supabaseService.syncAlert(updated).catch(e => console.warn('sync resetAlert:', e));
+        return updated;
+      }
+      return a;
+    }));
+  };
+
+  const handleDeleteMarketStock = (ticker: string) => {
+    setDeletedStocks(prev => {
+      if (prev.includes(ticker)) return prev;
+      return [...prev, ticker];
+    });
+  };
+
+  const handleRestoreAllMarketStocks = () => {
+    setDeletedStocks([]);
+  };
+
+  const handleSearchAndAddStock = (newStock: MarketStock) => {
+    const normalizedTicker = normalizeTicker(newStock.ticker);
+    const normalizedStock = { ...newStock, ticker: normalizedTicker };
+
+    // Track this ticker as user-searched
+    setSearchedTickers(prev => new Set(prev).add(normalizedTicker));
+
+    // Save custom searched stock back to localStorage so it persists across reloads
+    try {
+      const saved = localStorage.getItem('custom_searched_stocks');
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (!parsed.some((s: MarketStock) => s.ticker === normalizedTicker)) {
+        parsed.push(normalizedStock);
+        localStorage.setItem('custom_searched_stocks', JSON.stringify(parsed));
+      }
+    } catch (e) {
+      console.error('Error saving searched stock to custom_searched_stocks cache:', e);
+    }
+
+    // Save custom searched stock to IndexedDB for cloud backup
+    portafolioDB.saveCustomStock(normalizedStock).catch(err => console.error('Error saving custom stock to IndexedDB:', err));
+    // Sync custom stock to Supabase per-record
+    supabaseService.syncCustomStock(normalizedStock).catch(e => console.warn('sync customStock:', e));
+
+    setMarketStocks(prev => {
+      if (prev.some(s => s.ticker === normalizedTicker)) return prev;
+      return [...prev, normalizedStock];
+    });
+  };
+
+  useEffect(() => {
+    const speed = 0.7;
+    const handler = (e: WheelEvent) => {
+      const target = (e.currentTarget as HTMLElement);
+      e.preventDefault();
+      target.scrollBy({ top: e.deltaY * speed, behavior: 'smooth' });
+    };
+    const observer = new MutationObserver(() => {
+      document.querySelectorAll<HTMLElement>('.table-scroll-container').forEach(el => {
+        if (!el.dataset.smoothScroll) {
+          el.dataset.smoothScroll = 'true';
+          el.addEventListener('wheel', handler, { passive: false });
+        }
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Calculations
+  const todayStr = new Date().toISOString().split('T')[0];
+  const portfolioValuation = holdings.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0);
+  const totalContributed = holdings.reduce((sum, h) => sum + (h.shares * h.buyPrice), 0);
+  const totalDividends = dividends.filter(d => d.received).reduce((sum, d) => sum + d.totalAmount, 0);
+  const totalTaxRefunds = refunds.reduce((sum, r) => sum + r.amount, 0);
+  const dailyPnL = holdings.reduce((sum, h) => {
+    // Stocks bought today weren't in the portfolio at yesterday's close
+    if (h.buyDate && h.buyDate >= todayStr) return sum;
+    const stock = marketStocks.find(s => normalizeTicker(s.ticker) === normalizeTicker(h.ticker));
+    if (stock && stock.price > 0) {
+      if (stock.previousClose != null && stock.previousClose > 0) {
+        return sum + (h.shares * (stock.price - stock.previousClose));
+      }
+      if (stock.changePercent != null) {
+        const pct = stock.changePercent / 100;
+        const changePerShare = stock.price * pct / (1 + pct);
+        return sum + (h.shares * changePerShare);
+      }
+    }
+    return sum;
+  }, 0);
+
+  const ownedTickers = new Set(holdings.map(h => normalizeTicker(h.ticker)));
+  const ownedMarketStocks = marketStocks.filter(s => ownedTickers.has(normalizeTicker(s.ticker)));
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-teal-500 selection:text-slate-900">
+      <Header
+        activeTab={activeTab}
+        setActiveTab={handleTabChange}
+        portfolioValue={portfolioValuation}
+        nextRefreshTime={nextRefreshTime}
+      />
+
+      <main className="flex-1 max-w-[1400px] w-full mx-auto p-4 md:p-6 lg:p-8">
+        {isLoading ? (
+          <div className="min-h-[50vh] flex flex-col items-center justify-center space-y-4">
+            <div className="w-10 h-10 border-4 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-xs text-slate-500 font-medium">Iniciando base de datos local y cargando portafolio chileno...</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+
+            {/* API Error Banner */}
+            {refreshError && (
+              <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 shadow-xs flex items-start justify-between gap-3">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-7 h-7 rounded-full bg-rose-100 flex items-center justify-center text-rose-500 shrink-0">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
+                  </div>
+                  <p className="text-xs text-rose-700 font-medium">{refreshError}</p>
+                </div>
+                <button
+                  onClick={() => setRefreshError(null)}
+                  className="text-rose-400 hover:text-rose-600 p-1 rounded-lg transition shrink-0 cursor-pointer"
+                  title="Cerrar"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Active Fired Price Alerts List Banner */}
+            {firedNotificationMessages.length > 0 && (
+              <div className="space-y-2 animate-fadeIn">
+                {firedNotificationMessages.map((msg) => (
+                  <div key={msg.id} className="bg-amber-50 border border-amber-300 rounded-xl p-3 shadow-sm flex items-start justify-between gap-3">
+                    <div className="flex items-start space-x-2.5">
+                      <div className="w-8 h-8 rounded-full bg-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+                        <Bell className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-800">Alerta de Variación de Precio Sonoro</p>
+                        <p className="text-xs text-slate-600 mt-0.5">{msg.message}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setFiredNotificationMessages(prev => prev.filter(m => m.id !== msg.id))}
+                      className="text-amber-400 hover:text-amber-600 p-1 rounded-lg transition shrink-0 cursor-pointer"
+                      title="Cerrar"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.2 }}
+              className="w-full"
+            >
+              {activeTab === 'dashboard' && (
+                <ChartsAndAnalytics
+                  holdings={holdings}
+                  contributedCapital={totalContributed}
+                  totalDividends={totalDividends}
+                  totalTaxRefunds={totalTaxRefunds}
+                  annualPerformancePercentage={annualPerformancePercent}
+                  setAnnualPerformancePercentage={handleSetAnnualPerformancePercent}
+                  holdingsCount={holdings.length}
+                  dailyPnL={dailyPnL}
+                />
+              )}
+
+              {activeTab === 'portfolio' && (
+                <MyPortfolio
+                  holdings={holdings}
+                  onAddHolding={handleAddHolding}
+                  onUpdateHoldingPrice={handleUpdateHoldingPrice}
+                  onUpdateHoldingYield={handleUpdateHoldingYield}
+                  onDeleteHolding={handleDeleteHolding}
+                  onResetManualPrice={handleResetManualPrice}
+                  marketStocks={ownedMarketStocks}
+                  dailyPnL={dailyPnL}
+                  onSearchAndAddStock={handleSearchAndAddStock}
+                />
+              )}
+
+              {activeTab === 'market' && (
+                <MarketWatch
+                  marketStocks={marketStocks.filter(s => searchedTickers.has(s.ticker) && !deletedStocks.includes(s.ticker))}
+                  onQuickBuy={handleMarketQuickBuy}
+                  holdings={holdings}
+                  onSearchAndAddStock={handleSearchAndAddStock}
+                  onDeleteStock={handleDeleteMarketStock}
+                  deletedStocksCount={deletedStocks.length}
+                  onRestoreAllStocks={handleRestoreAllMarketStocks}
+                  nextRefreshTime={nextRefreshTime}
+                  alerts={alerts}
+                  onToggleAlert={handleToggleAlert}
+                  onUpdateTargetPrice={handleUpdateTargetPrice}
+                  onResetAlert={handleResetAlert}
+                />
+              )}
+
+              {activeTab === 'plan' && (
+                <InvestmentPlan
+                  marketStocks={ownedMarketStocks}
+                  holdings={holdings}
+                  refreshKey={investmentPlanRefreshKey}
+                />
+              )}
+
+              {activeTab === 'dividends' && (
+                <DividendTracker
+                  dividends={dividends}
+                  onAddDividend={handleAddDividend}
+                  onUpdateDividend={handleUpdateDividend}
+                  onToggleReceived={handleToggleReceived}
+                  onDeleteDividend={handleDeleteDividend}
+                  holdings={holdings}
+                  onSyncDividends={() => handleSyncDividends()}
+                  isSyncing={isSyncingDividends}
+                />
+              )}
+
+              {activeTab === 'taxes' && (
+                <TaxRefunds
+                  refunds={refunds}
+                  onAddRefund={handleAddRefund}
+                  onDeleteRefund={handleDeleteRefund}
+                />
+              )}
+
+              {activeTab === 'history' && (
+                <HistoryPage holdings={holdings} dividends={dividends} todayPnL={dailyPnL} />
+              )}
+
+              {activeTab === 'backup' && (
+                <SupabaseSync
+                  onImport={async (data: DBBackupData) => {
+                    try {
+                      await portafolioDB.importBackup(data);
+                      const [storedHoldings, storedDividends, storedRefunds, storedYield, storedCustomStocks, storedAlerts] = await Promise.all([
+                        portafolioDB.getHoldings(),
+                        portafolioDB.getDividends(),
+                        portafolioDB.getRefunds(),
+                        portafolioDB.getAnnualYield(),
+                        portafolioDB.getCustomStocks(),
+                        portafolioDB.getAlerts()
+                      ]);
+
+                      setHoldings(storedHoldings);
+                      setDividends(storedDividends);
+                      setRefunds(storedRefunds);
+                      setAnnualPerformancePercent(storedYield);
+                      if (storedAlerts.length > 0) setAlerts(storedAlerts);
+                      
+                      const customOnly = dedupeCustomStocks(storedCustomStocks);
+                      setMarketStocks(customOnly);
+                      const tickerSet = new Set(customOnly.map(s => normalizeTicker(s.ticker)));
+                      setSearchedTickers(tickerSet);
+                      try {
+                        localStorage.setItem('custom_searched_stocks', JSON.stringify(customOnly));
+                      } catch (e) {
+                        console.warn('Error saving updated custom_stocks on cloud restore:', e);
+                      }
+
+                      if (data.alerts) {
+                        setAlerts(data.alerts);
+                      }
+                      if (data.deletedTickers) {
+                        setDeletedStocks(data.deletedTickers);
+                        localStorage.setItem('deleted_market_stocks', JSON.stringify(data.deletedTickers));
+                      }
+
+                      handleTabChange('dashboard');
+                    } catch (err) {
+                      console.error('Error al importar datos:', err);
+                    }
+                  }}
+                  getBackupData={() => {
+                    return {
+                      holdings,
+                      dividends,
+                      refunds,
+                      annualPerformancePercent,
+                      deletedTickers: deletedStocks,
+                      customStocks: marketStocks.filter(s => !["CHILE","SQM-B","ENELCHILE","CENCOSHOP","COPEC","VAPORES","BSANTANDER","CMPC","FALABELLA","ANDINA-B"].includes(s.ticker)),
+                      alerts,
+                      exportedAt: new Date().toISOString()
+                    };
+                  }}
+                  onExportBackup={handleExportBackup}
+                  onImportBackup={handleImportBackup}
+                  onClearAllData={handleClearAllData}
+                />
+              )}
+            </motion.div>
+          </AnimatePresence>
+          </div>
+        )}
+      </main>
+
+      <footer className="bg-slate-900 text-slate-500 text-[10px] py-3 px-4 border-t border-slate-800 text-center w-full mt-12">
+        <p>Software libre para la <span className="text-slate-400">Comunidad Financiera de Chile</span>. Datos con fines educativos e informativos &mdash; no constituye asesoría de inversión. <span className="text-slate-400">#InversiónConsciente</span></p>
+      </footer>
+    </div>
+  );
+}
