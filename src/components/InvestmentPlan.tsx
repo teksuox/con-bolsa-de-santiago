@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StockHolding } from '../types';
 import { formatCLP } from '../utils';
-import { portafolioDB } from '../db';
 import { supabaseService } from '../lib/supabaseService';
 import { PlusCircle, X, AlertCircle, ArrowRight, ArrowUpDown } from 'lucide-react';
 
@@ -26,23 +25,30 @@ export default function InvestmentPlan({ marketStocks, refreshKey }: InvestmentP
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    portafolioDB.getInvestmentPlan().then(plan => {
+    supabaseService.pullInvestmentPlan().then(plan => {
       if (plan) {
         setBudget(plan.budget ?? 1000000);
         setAllocations(plan.allocations ?? []);
       }
       setLoaded(true);
-    }).catch(() => setLoaded(true));
+    }).catch(() => {
+      console.warn('[InvestmentPlan] Error loading plan');
+      setLoaded(true);
+    });
   }, [refreshKey]);
 
-  // Persist to IndexedDB when data changes
+  // Persist to Supabase when data changes (skip initial mount)
   const lastSyncKeyRef = useRef('');
+  const isFirstRender = useRef(true);
   useEffect(() => {
     if (!loaded) return;
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
     const key = JSON.stringify({ budget, allocations });
-    if (key === lastSyncKeyRef.current) return; // break Realtime loop
+    if (key === lastSyncKeyRef.current) return;
     lastSyncKeyRef.current = key;
-    portafolioDB.saveInvestmentPlan({ budget, allocations }).catch(() => {});
     supabaseService.syncInvestmentPlan({ budget, allocations }).catch(() => {});
   }, [budget, allocations, loaded]);
 

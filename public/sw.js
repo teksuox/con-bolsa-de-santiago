@@ -1,4 +1,4 @@
-const CACHE_NAME = 'acciones-chile-v3';
+const CACHE_NAME = 'acciones-chile-v4';
 const ASSETS_TO_CACHE = [
   '/icon.svg',
   '/icon-192.png',

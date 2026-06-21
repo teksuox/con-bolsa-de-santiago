@@ -6,9 +6,9 @@
 import React, { useState } from 'react';
 import { formatCLP } from '../utils';
 import { 
-  Percent, TrendingUp, Sparkles, Award, ArrowUpRight, ArrowDownRight
+  Percent, TrendingUp, Sparkles, Award, PieChart, AlertTriangle
 } from 'lucide-react';
-import { StockHolding } from '../types';
+import { StockHolding, SectorAllocation } from '../types';
 
 interface ChartsAndAnalyticsProps {
   holdings?: StockHolding[];
@@ -19,6 +19,7 @@ interface ChartsAndAnalyticsProps {
   setAnnualPerformancePercentage: (val: number) => void;
   holdingsCount: number;
   dailyPnL: number;
+  sectorAllocation?: SectorAllocation[];
 }
 
 export default function ChartsAndAnalytics({
@@ -30,6 +31,7 @@ export default function ChartsAndAnalytics({
   setAnnualPerformancePercentage,
   holdingsCount,
   dailyPnL,
+  sectorAllocation = [],
 }: ChartsAndAnalyticsProps) {
   const [projectionYear, setProjectionYear] = useState<number>(30);
   const [annualContribution, setAnnualContribution] = useState<number>(0);
@@ -386,6 +388,95 @@ export default function ChartsAndAnalytics({
           </div>
         </div>
       </div>
+
+      {/* Row 5: Análisis de Concentración */}
+      {sectorAllocation.length > 0 && (
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
+          <div className="flex items-center space-x-2 mb-4">
+            <PieChart className="w-4 h-4 text-indigo-500" />
+            <h4 className="font-bold text-slate-800 text-xs">Análisis de Concentración</h4>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Donut Chart */}
+            <div className="flex items-center justify-center">
+              <div className="relative w-40 h-40">
+                <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                  {sectorAllocation.map((s, i) => {
+                    const colors = ['#6366f1','#14b8a6','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#64748b'];
+                    const totalPct = sectorAllocation.slice(0, i).reduce((a, x) => a + x.percentage, 0);
+                    const circumference = 100;
+                    const offset = 100 - totalPct;
+                    const length = s.percentage;
+                    return (
+                      <circle key={s.sector} cx="18" cy="18" r="15.915"
+                        fill="none" stroke={colors[i % colors.length]} strokeWidth="3"
+                        strokeDasharray={`${length} ${circumference - length}`}
+                        strokeDashoffset={offset} />
+                    );
+                  })}
+                  <circle cx="18" cy="18" r="15.915" fill="none" stroke="#e2e8f0" strokeWidth="3"
+                    strokeDasharray={`${100 - sectorAllocation.reduce((a, s) => a + s.percentage, 0)} 100`}
+                    strokeDashoffset={sectorAllocation.reduce((a, s) => a + s.percentage, 0)} />
+                </svg>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="text-center">
+                    <span className="block text-lg font-extrabold font-mono text-slate-800">{sectorAllocation.length}</span>
+                    <span className="block text-[9px] text-slate-400 uppercase tracking-wider">Sectores</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Sector List */}
+            <div className="space-y-2.5">
+              {sectorAllocation.sort((a, b) => b.percentage - a.percentage).map((s, i) => {
+                const colors = ['bg-indigo-500','bg-teal-500','bg-amber-500','bg-rose-500','bg-purple-500','bg-pink-500','bg-cyan-500','bg-lime-500','bg-orange-500','bg-slate-400'];
+                const isConcentrated = s.percentage > 30;
+                return (
+                  <div key={s.sector}>
+                    <div className="flex items-center justify-between text-[10px] mb-0.5">
+                      <div className="flex items-center gap-1">
+                        <span className={`w-2 h-2 rounded-full ${colors[i % colors.length]}`} />
+                        <span className="font-semibold text-slate-700">{s.sector}</span>
+                        {isConcentrated && (
+                          <AlertTriangle className="w-3 h-3 text-amber-500" />
+                        )}
+                      </div>
+                      <span className={`font-mono font-bold ${isConcentrated ? 'text-amber-600' : 'text-slate-600'}`}>
+                        {s.percentage.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                      <div className={`h-full rounded-full transition-all duration-700 ease-out ${isConcentrated ? 'bg-amber-400' : colors[i % colors.length]}`}
+                        style={{ width: `${s.percentage}%` }} />
+                    </div>
+                    <div className="flex justify-between text-[9px] text-slate-400 mt-0.5">
+                      <span>{formatCLP(s.value)}</span>
+                      <span>{s.count} {s.count === 1 ? 'activo' : 'activos'}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Concentration Alert */}
+          {sectorAllocation.some(s => s.percentage > 30) && (
+            <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <div>
+                  <span className="text-[11px] font-bold text-amber-800 block">Alta concentración detectada</span>
+                  <span className="text-[10px] text-amber-700 leading-relaxed block mt-0.5">
+                    {sectorAllocation.filter(s => s.percentage > 30).map(s => s.sector).join(', ')} supera el 30% del portafolio. 
+                    Considera diversificar para reducir riesgo.
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

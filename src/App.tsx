@@ -18,8 +18,6 @@ import InvestmentPlan from './components/InvestmentPlan';
 import { supabase } from './lib/supabase';
 import { supabaseService } from './lib/supabaseService';
 import { subscribeToChanges } from './lib/supabaseRealtime';
-import { DBBackupData, portafolioDB } from './db';
-
 import { StockHolding, DividendPayment, TaxRefund, MarketStock, StockAlert } from './types';
 import { normalizeTicker } from './utils';
 
@@ -37,7 +35,10 @@ function dedupeCustomStocks(stocks: MarketStock[]): MarketStock[] {
 
 export default function App() {
   // Auto-session restore from Supabase (handled by SDK via localStorage)
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const saved = localStorage.getItem('activeTab');
+    return saved || 'dashboard';
+  });
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // States initialized as empty arrays
@@ -76,13 +77,6 @@ export default function App() {
   const [alerts, setAlerts] = useState<StockAlert[]>([]);
 
   const [firedNotificationMessages, setFiredNotificationMessages] = useState<{ id: string; ticker: string; message: string }[]>([]);
-
-  // Sync alerts state to IndexedDB
-  useEffect(() => {
-    for (const a of alerts) {
-      portafolioDB.saveAlert(a);
-    }
-  }, [alerts]);
 
   // Synthesized double-pitch notification chime
   const playAlertSound = () => {
@@ -220,7 +214,7 @@ export default function App() {
         if (h && h.ticker) additionalTickersSet.add(h.ticker.toUpperCase());
       });
 
-      const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "VAPORES", "BSANTANDER", "CMPC", "FALABELLA", "ANDINA-B"];
+const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "VAPORES", "BSANTANDER", "CMPC", "FALABELLA", "ANDINA-B"];
       const additionalList = Array.from(additionalTickersSet)
         .filter(t => !standardTickers.includes(t));
 
@@ -239,51 +233,35 @@ export default function App() {
             const customStocks = prev.filter(p => !normalizedQuotes.some((q: any) => q.ticker === normalizeTicker(p.ticker)));
             const updatedList = [...normalizedQuotes, ...customStocks];
             
-            // Only persist searched tickers to localStorage
-            const searched = searchedTickersRef.current;
-            const finalCustomSavedList = updatedList.filter(s => searched.has(s.ticker));
-            if (finalCustomSavedList.length > 0) {
-              try {
-                localStorage.setItem('custom_searched_stocks', JSON.stringify(finalCustomSavedList));
-              } catch (e) {
-                console.warn('Error saving updated custom_searched_stocks:', e);
+              // Only persist searched tickers to localStorage
+              const searched = searchedTickersRef.current;
+              const finalCustomSavedList = updatedList.filter(s => searched.has(s.ticker));
+              if (finalCustomSavedList.length > 0) {
+                try {
+                  localStorage.setItem('custom_searched_stocks', JSON.stringify(finalCustomSavedList));
+                } catch (e) {
+                  console.warn('Error saving updated custom_searched_stocks:', e);
+                }
               }
-
-              // Sync to IndexedDB for complete persistence/cloud backup
-              for (const s of finalCustomSavedList) {
-                portafolioDB.saveCustomStock(s).catch(err => console.error('Error auto-syncing custom stock to DB during refresh:', err));
-              }
-            }
-            return updatedList;
-          });
-
-          // 2. Refresh active holdings pricing (skip manually edited prices)
-          setHoldings(prev => {
-            return prev.map(h => {
-              if (h.manualPrice) return h;
-              const quote = normalizedQuotes.find((q: any) => q.ticker === normalizeTicker(h.ticker));
-              if (!quote) return h;
-              const updated = {
-                ...h,
-                currentPrice: quote.price || h.currentPrice
-              };
-              portafolioDB.saveHolding(updated); // Save updated price to IndexedDB
-              return updated;
+              return updatedList;
             });
-          });
-          setLastRefreshed(new Date());
-          setNextRefreshTime(Date.now() + 180000);
-          setRefreshError(null);
-          marketDataLoadedRef.current = true;
 
-            // Save daily snapshot for ProfitHistory
-            const snapshotValue = currentHoldings.reduce((sum, h) => {
-              if (h.manualPrice) return sum + h.shares * h.currentPrice;
-              const quote = normalizedQuotes.find((q: any) => q.ticker === normalizeTicker(h.ticker));
-              return sum + h.shares * (quote?.price || h.currentPrice);
-            }, 0);
-            const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
-            portafolioDB.saveDailySnapshot({ date: todayStr, portfolioValue: Math.round(snapshotValue) });
+            // 2. Refresh active holdings pricing (skip manually edited prices)
+            setHoldings(prev => {
+              return prev.map(h => {
+                if (h.manualPrice) return h;
+                const quote = normalizedQuotes.find((q: any) => q.ticker === normalizeTicker(h.ticker));
+                if (!quote) return h;
+                return {
+                  ...h,
+                  currentPrice: quote.price || h.currentPrice
+                };
+              });
+            });
+            setLastRefreshed(new Date());
+            setNextRefreshTime(Date.now() + 180000);
+            setRefreshError(null);
+            marketDataLoadedRef.current = true;
 
             // Backfill missing historical data (run once per day max)
             const lastBackfillKey = 'lastHistoryBackfill';
@@ -291,24 +269,21 @@ export default function App() {
             const todayBackfill = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
             if (lastBackfill !== todayBackfill) {
               localStorage.setItem(lastBackfillKey, todayBackfill);
-              // Fire-and-forget: get latest saved date and backfill if gap exists
-              portafolioDB.getLatestMonthlyPnLDate().then(lastSavedDate => {
-                if (lastSavedDate) {
-                  const yesterday = new Date();
-                  yesterday.setDate(yesterday.getDate() - 1);
-                  const yesterdayStr = yesterday.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
-                  if (lastSavedDate < yesterdayStr) {
-                    const tickers = currentHoldings.map(h => h.ticker).filter(Boolean);
-                    if (tickers.length > 0) {
-                      fetch('/api/backfill-history', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ tickers, lastSavedDate })
-                      }).catch(() => {}); // silent
-                    }
-                  }
+              const yesterday = new Date();
+              yesterday.setDate(yesterday.getDate() - 1);
+              const yesterdayStr = yesterday.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+              // Fire-and-forget backfill
+              const tickers = currentHoldings.map(h => h.ticker).filter(Boolean);
+              if (tickers.length > 0) {
+                const lastSavedDate = localStorage.getItem('lastPnLDate');
+                if (lastSavedDate && lastSavedDate < yesterdayStr) {
+                  fetch('/api/backfill-history', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tickers, lastSavedDate })
+                  }).catch(() => {});
                 }
-              }).catch(() => {});
+              }
             }
           } else {
           setRefreshError('La API respondió vacía. Los precios pueden estar desactualizados.');
@@ -370,21 +345,16 @@ export default function App() {
       if (response.ok) {
         const synced: DividendPayment[] = await response.json();
         if (synced && synced.length > 0) {
-          // Merge with current state dividends to preserve any existing user entries
-          setDividends(prev => {
-            const manuals = prev.filter(d => !d.id.startsWith('div-sys-'));
-            const sysKeys = new Set(synced.map(s => `${s.ticker}-${s.payoutDate}-${s.cutoffDate || ''}`));
-            
-            // Remove manual records of the same ticker/date to avoid duplication
-            const filteredManuals = manuals.filter(m => !sysKeys.has(`${m.ticker}-${m.payoutDate}-${m.cutoffDate || ''}`));
-            const merged = [...synced, ...filteredManuals];
-            
-            // Save to IndexedDB
-            synced.forEach(s => {
-              portafolioDB.saveDividend(s);
+            // Merge with current state dividends to preserve any existing user entries
+            setDividends(prev => {
+              const manuals = prev.filter(d => !d.id.startsWith('div-sys-'));
+              const sysKeys = new Set(synced.map(s => `${s.ticker}-${s.payoutDate}-${s.cutoffDate || ''}`));
+              
+              // Remove manual records of the same ticker/date to avoid duplication
+              const filteredManuals = manuals.filter(m => !sysKeys.has(`${m.ticker}-${m.payoutDate}-${m.cutoffDate || ''}`));
+              const merged = [...synced, ...filteredManuals];
+              return merged;
             });
-            return merged;
-          });
         } else {
           console.warn('No se encontraron dividendos nuevos para tus acciones.');
         }
@@ -399,74 +369,42 @@ export default function App() {
     }
   };
 
-  // Sync state from IndexedDB on initial mount
+  // Mount: check auth, load from Supabase, fetch market prices
   useEffect(() => {
     async function loadData() {
       try {
-        const [storedHoldings, storedDividends, storedRefunds, storedYield, storedCustomStocks, storedAlerts] = await Promise.all([
-          portafolioDB.getHoldings(),
-          portafolioDB.getDividends(),
-          portafolioDB.getRefunds(),
-          portafolioDB.getAnnualYield(),
-          portafolioDB.getCustomStocks(),
-          portafolioDB.getAlerts()
-        ]);
+        const { data: { session } } = await supabase.auth.getSession();
+        const user = session?.user ?? null;
+        setSupabaseUser(user);
 
-        setHoldings(storedHoldings);
-        setDividends(storedDividends);
-        setRefunds(storedRefunds);
-        setAnnualPerformancePercent(storedYield);
-        if (storedAlerts.length > 0) setAlerts(storedAlerts);
-
-        if (storedCustomStocks) {
-          const customOnly = dedupeCustomStocks(storedCustomStocks);
-          setMarketStocks(customOnly);
-          const tickerSet = new Set(customOnly.map(s => normalizeTicker(s.ticker)));
-          setSearchedTickers(tickerSet);
-          try {
-            localStorage.setItem('custom_searched_stocks', JSON.stringify(customOnly));
-          } catch (e) {
-            console.warn('Error saving custom stocks to localstorage on mount:', e);
-          }
-        // Clean up duplicate entries in IndexedDB (e.g. "QUIÑENCO" → "QUINENCO")
-        const keptTickers = new Set(customOnly.map(s => s.ticker));
-        for (const old of storedCustomStocks) {
-          const normalized = normalizeTicker(old.ticker);
-          if (keptTickers.has(normalized) && normalized !== old.ticker) {
-            portafolioDB.deleteCustomStock(old.ticker).catch(() => {});
-          }
+        let cloud: Awaited<ReturnType<typeof supabaseService.pullAll>> | null = null;
+        if (user) {
+          cloud = await supabaseService.pullAll();
+          setHoldings(cloud.holdings);
+          setDividends(cloud.dividends);
+          setRefunds(cloud.refunds);
+          if (cloud.alerts.length > 0) setAlerts(cloud.alerts);
+          if (cloud.settings?.annualPerformancePercent) setAnnualPerformancePercent(cloud.settings.annualPerformancePercent);
         }
-      }
 
-      // 1. Load cached market stocks from Supabase INSTANT (no Yahoo fetch)
-      try {
-        const cacheResp = await fetch('/api/market-stocks-cache');
-        if (cacheResp.ok) {
-          const cacheData = await cacheResp.json();
-          if (cacheData.data && Array.isArray(cacheData.data) && cacheData.data.length > 0) {
-            const normalizedCached = cacheData.data.map((q: any) => ({ ...q, ticker: normalizeTicker(q.ticker) }));
-            // Merge with custom stocks from IndexedDB
-            setMarketStocks(prev => {
-              const customStocks = prev.filter(p => !normalizedCached.some((q: any) => q.ticker === normalizeTicker(p.ticker)));
-              return [...normalizedCached, ...customStocks];
-            });
+        // Restore searched stocks from localStorage (user-preference, not user-data)
+        try {
+          const saved = localStorage.getItem('custom_searched_stocks');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const deduped = dedupeCustomStocks(parsed);
+              setMarketStocks(deduped);
+              setSearchedTickers(new Set(deduped.map(s => normalizeTicker(s.ticker))));
+            }
           }
+        } catch (e) {
+          console.warn('Error reading custom_searched_stocks on mount:', e);
         }
-      } catch (e) {
-        console.warn('Error loading market stocks cache:', e);
-      }
 
-      // 2. Fetch real-time market stock prices in BACKGROUND (including custom searched ones and ones from personal holdings!)
+        // Fetch real-time market stock prices from Yahoo DIRECTLY
         try {
           const additionalTickersSet = new Set<string>();
-          
-          if (storedCustomStocks && storedCustomStocks.length > 0) {
-            storedCustomStocks.forEach(s => {
-              if (s && s.ticker) additionalTickersSet.add(normalizeTicker(s.ticker));
-            });
-          }
-          
-          // Load custom searched ones (fallback and legacy compatibility)
           try {
             const saved = localStorage.getItem('custom_searched_stocks');
             const parsed = saved ? JSON.parse(saved) : [];
@@ -479,8 +417,8 @@ export default function App() {
             console.warn('Error reading custom searched tickers on mount:', e);
           }
 
-          // Load owned ones from db
-          storedHoldings.forEach(h => {
+          const currentHoldings = cloud?.holdings || [];
+          currentHoldings.forEach((h: StockHolding) => {
             if (h && h.ticker) additionalTickersSet.add(normalizeTicker(h.ticker));
           });
 
@@ -497,12 +435,9 @@ export default function App() {
             const quotes = await marketResponse.json();
             if (quotes && quotes.length > 0) {
               const normalizedQuotes = quotes.map((q: any) => ({ ...q, ticker: normalizeTicker(q.ticker) }));
-              // 1. Update Market reference list (all quotes for pricing, only searched ones persist)
               setMarketStocks(prev => {
                 const customStocks = prev.filter(p => !normalizedQuotes.some((q: any) => q.ticker === normalizeTicker(p.ticker)));
                 const updatedList = [...normalizedQuotes, ...customStocks];
-                
-                // Only persist searched tickers from localStorage
                 const saved = localStorage.getItem('custom_searched_stocks');
                 let searched = new Set<string>();
                 if (saved) {
@@ -520,49 +455,36 @@ export default function App() {
                   } catch (e) {
                     console.warn('Error saving updated custom_searched_stocks:', e);
                   }
-                  
-                  // Save custom stocks in IndexedDB as well (normalized, no duplicates)
-                  const seen = new Set<string>();
-                  for (const s of finalCustomSavedList) {
-                    const normalized = { ...s, ticker: normalizeTicker(s.ticker) };
-                    if (!seen.has(normalized.ticker)) {
-                      seen.add(normalized.ticker);
-                      portafolioDB.saveCustomStock(normalized).catch(err => console.error('Error auto-syncing custom stock to DB on mount:', err));
-                    }
-                  }
                 }
                 return updatedList;
               });
 
-              // 2. Refresh active holdings pricing (skip manually edited prices)
               setHoldings(prev => {
                 return prev.map(h => {
                   if (h.manualPrice) return h;
                   const quote = normalizedQuotes.find((q: any) => q.ticker === normalizeTicker(h.ticker));
                   if (!quote) return h;
-                  const updated = {
-                    ...h,
-                    currentPrice: quote.price || h.currentPrice
-                  };
-                  portafolioDB.saveHolding(updated); // Save updated price
-                  return updated;
+                  return { ...h, currentPrice: quote.price || h.currentPrice };
                 });
               });
               marketDataLoadedRef.current = true;
+              setLastRefreshed(new Date());
+              setNextRefreshTime(Date.now() + 180000);
+              setRefreshError(null);
             }
           }
         } catch (apiErr) {
-          console.warn('Could not fetch live stock quotes, using local cache:', apiErr);
+          console.warn('Could not fetch live stock quotes:', apiErr);
+          setRefreshError('Error de red al obtener precios iniciales.');
         }
 
-        // Auto trigger background sync for dividends if user has holdings and no dividends exist
-        if (storedHoldings.length > 0 && storedDividends.length === 0) {
-          // Fire direct sync
+        // Auto trigger dividend sync if user has holdings and no dividends
+        if (user && (cloud?.holdings?.length || 0) > 0 && (cloud?.dividends?.length || 0) === 0) {
           const response = await fetch('/api/sync-dividends', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              holdings: storedHoldings.map(h => ({
+              holdings: (cloud?.holdings || []).map((h: StockHolding) => ({
                 ticker: h.ticker,
                 buyDate: h.buyDate,
                 shares: h.shares
@@ -573,12 +495,11 @@ export default function App() {
             const synced = await response.json();
             if (Array.isArray(synced) && synced.length > 0) {
               setDividends(synced);
-              synced.forEach((s: any) => portafolioDB.saveDividend(s));
             }
           }
         }
       } catch (err) {
-        console.error('Error cargando base de datos local:', err);
+        console.error('Error en inicialización:', err);
       } finally {
         setIsLoading(false);
       }
@@ -610,71 +531,56 @@ export default function App() {
 
         // Merge holdings: Supabase wins if newer
         for (const ch of cloud.holdings) {
-          const local = holdings.find(h => h.id === ch.id);
-          if (!local || (local.updatedAt || '') < (ch.updatedAt || '')) {
-            await portafolioDB.saveHolding(ch);
-            changed = true;
-          }
+          setHoldings(prev => {
+            const local = prev.find(h => h.id === ch.id);
+            if (!local || (local.updatedAt || '') < (ch.updatedAt || '')) {
+              changed = true;
+              return prev.map(h => h.id === ch.id ? ch : h).concat(local ? [] : [ch]);
+            }
+            return prev;
+          });
         }
         // Merge dividends
         for (const cd of cloud.dividends) {
-          const local = dividends.find(d => d.id === cd.id);
-          if (!local || (local.updatedAt || '') < (cd.updatedAt || '')) {
-            await portafolioDB.saveDividend(cd);
-            changed = true;
-          }
+          setDividends(prev => {
+            const local = prev.find(d => d.id === cd.id);
+            if (!local || (local.updatedAt || '') < (cd.updatedAt || '')) {
+              changed = true;
+              return prev.map(d => d.id === cd.id ? cd : d).concat(local ? [] : [cd]);
+            }
+            return prev;
+          });
         }
         // Merge refunds
         for (const cr of cloud.refunds) {
-          const local = refunds.find(r => r.id === cr.id);
-          if (!local || (local.updatedAt || '') < (cr.updatedAt || '')) {
-            await portafolioDB.saveRefund(cr);
-            changed = true;
-          }
+          setRefunds(prev => {
+            const local = prev.find(r => r.id === cr.id);
+            if (!local || (local.updatedAt || '') < (cr.updatedAt || '')) {
+              changed = true;
+              return prev.map(r => r.id === cr.id ? cr : r).concat(local ? [] : [cr]);
+            }
+            return prev;
+          });
         }
         // Merge alerts
         for (const ca of cloud.alerts) {
-          const local = alerts.find(a => a.ticker === ca.ticker);
-          if (!local || (local.updatedAt || '') < (ca.updatedAt || '')) {
-            await portafolioDB.saveAlert(ca);
-            changed = true;
-          }
-        }
-        // Merge custom stocks
-        for (const cs of cloud.customStocks) {
-          await portafolioDB.saveCustomStock(cs);
+          setAlerts(prev => {
+            const local = prev.find(a => a.ticker === ca.ticker);
+            if (!local || (local.updatedAt || '') < (ca.updatedAt || '')) {
+              changed = true;
+              return local ? prev.map(a => a.ticker === ca.ticker ? ca : a) : [...prev, ca];
+            }
+            return prev;
+          });
         }
         // Update settings
-        if (cloud.settings && cloud.settings.annualPerformancePercent) {
-          await portafolioDB.saveAnnualYield(cloud.settings.annualPerformancePercent);
-          changed = true;
-        }
-        // Update investment plan
-        if (cloud.investmentPlan) {
-          await portafolioDB.saveInvestmentPlan(cloud.investmentPlan);
+        if (cloud.settings?.annualPerformancePercent) {
+          setAnnualPerformancePercent(cloud.settings.annualPerformancePercent);
           changed = true;
         }
 
         if (changed) {
-          // Reload full state from IndexedDB
-          const [h, d, r, y, c] = await Promise.all([
-            portafolioDB.getHoldings(),
-            portafolioDB.getDividends(),
-            portafolioDB.getRefunds(),
-            portafolioDB.getAnnualYield(),
-            portafolioDB.getAlerts()
-          ]);
-          setHoldings(h);
-          setDividends(d);
-          setRefunds(r);
-          setAnnualPerformancePercent(y);
-          setAlerts(c);
-          const customStocks = await portafolioDB.getCustomStocks();
-          if (customStocks.length > 0) {
-            const deduped = dedupeCustomStocks(customStocks);
-            setMarketStocks(deduped);
-            setSearchedTickers(new Set(deduped.map(s => normalizeTicker(s.ticker))));
-          }
+          setInvestmentPlanRefreshKey(k => k + 1);
         }
       } catch (e) {
         console.warn('Auto-sync pull error:', e);
@@ -683,7 +589,6 @@ export default function App() {
 
     const timer = setTimeout(pullFromCloud, 1500);
     return () => clearTimeout(timer);
-    // Only run on mount when user becomes available
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabaseUser, isLoading]);
 
@@ -707,7 +612,8 @@ export default function App() {
         setSearchedTickers(new Set(deduped.map(s => normalizeTicker(s.ticker))));
       },
       onSettingsChanged: async () => {
-        setAnnualPerformancePercent(await portafolioDB.getAnnualYield());
+        const s = await supabaseService.pullSettings();
+        if (s?.annualPerformancePercent) setAnnualPerformancePercent(s.annualPerformancePercent);
       },
       onInvestmentPlanChanged: () => {
         setInvestmentPlanRefreshKey(k => k + 1);
@@ -752,9 +658,6 @@ export default function App() {
       console.error('Error auto-persisting holding ticker as custom searched stock:', e);
     }
 
-    // Save custom stock in IndexedDB as well
-    portafolioDB.saveCustomStock(parsedStock).catch(err => console.error('Error auto-persisting custom stock to IndexedDB:', err));
-
     setMarketStocks(prev => {
       if (prev.some(s => normalizeTicker(s.ticker) === normalizedTicker)) return prev;
       return [...prev, parsedStock];
@@ -763,7 +666,6 @@ export default function App() {
     // Optimistic UI state update
     const updatedHoldings = [...holdings, holding];
     setHoldings(updatedHoldings);
-    await portafolioDB.saveHolding(holding);
     // Sync to Supabase per-record
     supabaseService.syncHolding(holding).catch(e => console.warn('sync addHolding:', e));
 
@@ -783,7 +685,6 @@ export default function App() {
     }));
 
     if (targetHolding) {
-      await portafolioDB.saveHolding({ ...targetHolding, manualPrice: true });
       supabaseService.syncHolding({ ...targetHolding, manualPrice: true }).catch(e => console.warn('sync updatePrice:', e));
       
       // Update corresponding reference price in market stock list
@@ -800,7 +701,6 @@ export default function App() {
     setHoldings(prev => prev.map(h => {
       if (h.id === id) {
         const updated = { ...h, manualPrice: false };
-        portafolioDB.saveHolding(updated);
         supabaseService.syncHolding(updated).catch(e => console.warn('sync resetManual:', e));
         return updated;
       }
@@ -820,17 +720,12 @@ export default function App() {
     }));
 
     if (targetHolding) {
-      await portafolioDB.saveHolding(targetHolding);
       supabaseService.syncHolding(targetHolding).catch(e => console.warn('sync updateYield:', e));
     }
   };
 
   const handleDeleteHolding = async (id: string) => {
-    // First delete from IndexedDB
-    await portafolioDB.deleteHolding(id);
-    // Then update state
     setHoldings(prev => prev.filter(h => h.id !== id));
-    // Sync delete to Supabase per-record
     supabaseService.deleteHolding(id).catch(e => console.warn('sync deleteHolding:', e));
   };
 
@@ -840,7 +735,6 @@ export default function App() {
     const div: DividendPayment = { ...newDiv, id };
     
     setDividends(prev => [div, ...prev]);
-    await portafolioDB.saveDividend(div);
     supabaseService.syncDividend(div).catch(e => console.warn('sync addDividend:', e));
   };
 
@@ -857,12 +751,9 @@ export default function App() {
       return d;
     }));
     if (updated) {
-      // Remove old key from IndexedDB if id changed
       if (id !== updated.id) {
-        await portafolioDB.deleteDividend(id);
         supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
       }
-      await portafolioDB.saveDividend(updated);
       supabaseService.syncDividend(updated).catch(e => console.warn('sync updateDividend:', e));
     }
   };
@@ -881,19 +772,15 @@ export default function App() {
     }));
 
     if (targetDiv) {
-      // Remove old key from IndexedDB if id changed
       if (id !== targetDiv.id) {
-        await portafolioDB.deleteDividend(id);
         supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
       }
-      await portafolioDB.saveDividend(targetDiv);
       supabaseService.syncDividend(targetDiv).catch(e => console.warn('sync toggleReceived:', e));
     }
   };
 
   const handleDeleteDividend = async (id: string) => {
     setDividends(prev => prev.filter(d => d.id !== id));
-    await portafolioDB.deleteDividend(id);
     supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
   };
 
@@ -903,19 +790,16 @@ export default function App() {
     const ref: TaxRefund = { ...newRefund, id };
     
     setRefunds(prev => [ref, ...prev]);
-    await portafolioDB.saveRefund(ref);
     supabaseService.syncRefund(ref).catch(e => console.warn('sync addRefund:', e));
   };
 
   const handleDeleteRefund = async (id: string) => {
     setRefunds(prev => prev.filter(r => r.id !== id));
-    await portafolioDB.deleteRefund(id);
     supabaseService.deleteRefund(id).catch(e => console.warn('sync deleteRefund:', e));
   };
 
   const handleSetAnnualPerformancePercent = async (val: number) => {
     setAnnualPerformancePercent(val);
-    await portafolioDB.saveAnnualYield(val);
     supabaseService.syncSettings({ annualPerformancePercent: val }).catch(e => console.warn('sync settings:', e));
   };
 
@@ -923,7 +807,7 @@ export default function App() {
   // Backup file routines
   const handleExportBackup = async () => {
     try {
-      const data = await portafolioDB.exportBackup();
+      const data = await supabaseService.exportBackup();
       const text = JSON.stringify(data, null, 2);
       const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
       
@@ -943,29 +827,25 @@ export default function App() {
   const handleImportBackup = async (content: string) => {
     try {
       const parsed = JSON.parse(content);
-      await portafolioDB.importBackup(parsed);
-      
-      // Reload states from IndexedDB
-      const storedHoldings = await portafolioDB.getHoldings();
-      const storedDividends = await portafolioDB.getDividends();
-      const storedRefunds = await portafolioDB.getRefunds();
-      const storedYield = await portafolioDB.getAnnualYield();
-      const storedCustomStocks = await portafolioDB.getCustomStocks();
+      await supabaseService.importBackup(parsed);
 
-      setHoldings(storedHoldings);
-      setDividends(storedDividends);
-      setRefunds(storedRefunds);
-      setAnnualPerformancePercent(storedYield);
-      
-      const customOnly = dedupeCustomStocks(storedCustomStocks);
+      // Reload states from Supabase
+      const cloud = await supabaseService.pullAll();
+      setHoldings(cloud.holdings);
+      setDividends(cloud.dividends);
+      setRefunds(cloud.refunds);
+      if (cloud.alerts.length > 0) setAlerts(cloud.alerts);
+      if (cloud.settings?.annualPerformancePercent) setAnnualPerformancePercent(cloud.settings.annualPerformancePercent);
+
+      const customOnly = dedupeCustomStocks(cloud.customStocks);
       setMarketStocks(customOnly);
       const tickerSet = new Set(customOnly.map(s => normalizeTicker(s.ticker)));
       setSearchedTickers(tickerSet);
-      
+
       try {
         localStorage.setItem('custom_searched_stocks', JSON.stringify(customOnly));
       } catch (e) {
-        console.warn('Error saving updated custom_searched_stocks on import:', e);
+        console.warn('Error saving updated custom_stocks on import:', e);
       }
     } catch (err) {
       console.error('Error importing backup:', err);
@@ -975,7 +855,7 @@ export default function App() {
 
   const handleClearAllData = async () => {
     try {
-      await portafolioDB.clearAllData();
+      await supabaseService.clearAllData();
       setHoldings([]);
       setDividends([]);
       setRefunds([]);
@@ -1076,8 +956,6 @@ export default function App() {
       console.error('Error saving searched stock to custom_searched_stocks cache:', e);
     }
 
-    // Save custom searched stock to IndexedDB for cloud backup
-    portafolioDB.saveCustomStock(normalizedStock).catch(err => console.error('Error saving custom stock to IndexedDB:', err));
     // Sync custom stock to Supabase per-record
     supabaseService.syncCustomStock(normalizedStock).catch(e => console.warn('sync customStock:', e));
 
@@ -1111,6 +989,11 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Persist active tab across refreshes
+  useEffect(() => {
+    localStorage.setItem('activeTab', activeTab);
+  }, [activeTab]);
+
   // Calculations
   const todayStr = new Date().toISOString().split('T')[0];
   const portfolioValuation = holdings.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0);
@@ -1136,6 +1019,24 @@ export default function App() {
 
   const ownedTickers = new Set(holdings.map(h => normalizeTicker(h.ticker)));
   const ownedMarketStocks = marketStocks.filter(s => ownedTickers.has(normalizeTicker(s.ticker)));
+
+  const sectorAllocation = (() => {
+    const map = new Map<string, { value: number; tickers: string[] }>();
+    for (const h of holdings) {
+      const stock = marketStocks.find(s => normalizeTicker(s.ticker) === normalizeTicker(h.ticker));
+      const sector = stock?.sector || 'No clasificado';
+      if (!map.has(sector)) map.set(sector, { value: 0, tickers: [] });
+      const entry = map.get(sector)!;
+      entry.value += h.shares * h.currentPrice;
+      entry.tickers.push(h.ticker);
+    }
+    const totalValue = Array.from(map.values()).reduce((a, e) => a + e.value, 0);
+    return Array.from(map.entries()).map(([sector, data]) => ({
+      sector, value: data.value, tickers: data.tickers,
+      count: data.tickers.length,
+      percentage: totalValue > 0 ? (data.value / totalValue) * 100 : 0
+    }));
+  })();
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-teal-500 selection:text-slate-900">
@@ -1209,7 +1110,7 @@ export default function App() {
               transition={{ duration: 0.2 }}
               className="w-full"
             >
-              {activeTab === 'dashboard' && (
+              <div className={activeTab === 'dashboard' ? '' : 'hidden'}>
                 <ChartsAndAnalytics
                   holdings={holdings}
                   contributedCapital={totalContributed}
@@ -1219,10 +1120,11 @@ export default function App() {
                   setAnnualPerformancePercentage={handleSetAnnualPerformancePercent}
                   holdingsCount={holdings.length}
                   dailyPnL={dailyPnL}
+                  sectorAllocation={sectorAllocation}
                 />
-              )}
+              </div>
 
-              {activeTab === 'portfolio' && (
+              <div className={activeTab === 'portfolio' ? '' : 'hidden'}>
                 <MyPortfolio
                   holdings={holdings}
                   onAddHolding={handleAddHolding}
@@ -1234,9 +1136,9 @@ export default function App() {
                   dailyPnL={dailyPnL}
                   onSearchAndAddStock={handleSearchAndAddStock}
                 />
-              )}
+              </div>
 
-              {activeTab === 'market' && (
+              <div className={activeTab === 'market' ? '' : 'hidden'}>
                 <MarketWatch
                   marketStocks={marketStocks.filter(s => searchedTickers.has(s.ticker) && !deletedStocks.includes(s.ticker))}
                   onQuickBuy={handleMarketQuickBuy}
@@ -1251,17 +1153,17 @@ export default function App() {
                   onUpdateTargetPrice={handleUpdateTargetPrice}
                   onResetAlert={handleResetAlert}
                 />
-              )}
+              </div>
 
-              {activeTab === 'plan' && (
+              <div className={activeTab === 'plan' ? '' : 'hidden'}>
                 <InvestmentPlan
                   marketStocks={ownedMarketStocks}
                   holdings={holdings}
                   refreshKey={investmentPlanRefreshKey}
                 />
-              )}
+              </div>
 
-              {activeTab === 'dividends' && (
+              <div className={activeTab === 'dividends' ? '' : 'hidden'}>
                 <DividendTracker
                   dividends={dividends}
                   onAddDividend={handleAddDividend}
@@ -1272,41 +1174,33 @@ export default function App() {
                   onSyncDividends={() => handleSyncDividends()}
                   isSyncing={isSyncingDividends}
                 />
-              )}
+              </div>
 
-              {activeTab === 'taxes' && (
+              <div className={activeTab === 'taxes' ? '' : 'hidden'}>
                 <TaxRefunds
                   refunds={refunds}
                   onAddRefund={handleAddRefund}
                   onDeleteRefund={handleDeleteRefund}
                 />
-              )}
+              </div>
 
-              {activeTab === 'history' && (
+              <div className={activeTab === 'history' ? '' : 'hidden'}>
                 <HistoryPage holdings={holdings} dividends={dividends} todayPnL={dailyPnL} />
-              )}
+              </div>
 
-              {activeTab === 'backup' && (
+              <div className={activeTab === 'backup' ? '' : 'hidden'}>
                 <SupabaseSync
-                  onImport={async (data: DBBackupData) => {
+                  onImport={async (data: any) => {
                     try {
-                      await portafolioDB.importBackup(data);
-                      const [storedHoldings, storedDividends, storedRefunds, storedYield, storedCustomStocks, storedAlerts] = await Promise.all([
-                        portafolioDB.getHoldings(),
-                        portafolioDB.getDividends(),
-                        portafolioDB.getRefunds(),
-                        portafolioDB.getAnnualYield(),
-                        portafolioDB.getCustomStocks(),
-                        portafolioDB.getAlerts()
-                      ]);
+                      await supabaseService.importBackup(data);
+                      const cloud = await supabaseService.pullAll();
+                      setHoldings(cloud.holdings);
+                      setDividends(cloud.dividends);
+                      setRefunds(cloud.refunds);
+                      if (cloud.alerts.length > 0) setAlerts(cloud.alerts);
+                      if (cloud.settings?.annualPerformancePercent) setAnnualPerformancePercent(cloud.settings.annualPerformancePercent);
 
-                      setHoldings(storedHoldings);
-                      setDividends(storedDividends);
-                      setRefunds(storedRefunds);
-                      setAnnualPerformancePercent(storedYield);
-                      if (storedAlerts.length > 0) setAlerts(storedAlerts);
-                      
-                      const customOnly = dedupeCustomStocks(storedCustomStocks);
+                      const customOnly = dedupeCustomStocks(cloud.customStocks);
                       setMarketStocks(customOnly);
                       const tickerSet = new Set(customOnly.map(s => normalizeTicker(s.ticker)));
                       setSearchedTickers(tickerSet);
@@ -1345,7 +1239,7 @@ export default function App() {
                   onImportBackup={handleImportBackup}
                   onClearAllData={handleClearAllData}
                 />
-              )}
+              </div>
             </motion.div>
           </AnimatePresence>
           </div>

@@ -93,12 +93,14 @@ export default function MarketWatch({
         setSearchSuccess(`${data.ticker} - ${data.name}`);
         setCustomTicker('');
         setSearch(data.ticker);
-        setTimeout(() => setSearchSuccess(''), 8000);
+        setTimeout(() => setSearchSuccess(''), 5000);
       } else {
         throw new Error('Respuesta inválida de la Bolsa');
       }
     } catch (err: any) {
-      setSearchError(err?.message || 'Error al conectar con la Bolsa de Santiago.');
+      const msg = err?.message || 'Error al conectar con la Bolsa de Santiago.';
+      setSearchError(msg);
+      setTimeout(() => setSearchError(''), 5000);
     } finally {
       setIsSearching(false);
     }

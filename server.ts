@@ -41,6 +41,7 @@ const INITIAL_MARKET_STOCKS_BACKUP = [
 // Some tickers use different symbols on Yahoo than our app
 const YAHOO_TICKER_ALIASES: Record<string, string> = {
   'CENCOSHOP': 'CENCOMALLS',
+  'COLBUM': 'COLBUN',
 };
 
 async function startServer() {
@@ -140,7 +141,7 @@ async function startServer() {
         if (closes[i] !== null && todayClose === null) { todayClose = closes[i]; continue; }
         if (closes[i] !== null && todayClose !== null && yesterdayClose === null) { yesterdayClose = closes[i]; break; }
       }
-      const previousClose = yesterdayClose !== null ? yesterdayClose : price;
+      const previousClose = yesterdayClose !== null ? yesterdayClose : meta.chartPreviousClose || price;
       const changePercent = (previousClose > 0) ? ((price - previousClose) / previousClose) * 100 : 0;
       const volumes = quotes?.volume || [];
       let volumeCLP = 0;
@@ -183,7 +184,7 @@ async function startServer() {
       const tickers = tickersParam.split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
 
       const results = await Promise.all(tickers.map(async (ticker) => {
-        const cleanTicker = ticker.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const cleanTicker = ticker.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         const cacheKey = `portfolio_history_${cleanTicker}`;
 
         // Helper: date string for N days ago
@@ -218,32 +219,42 @@ async function startServer() {
           } catch { /* cache miss, continue to fetch */ }
         }
 
-        // 2. Fetch from Yahoo
+        // 2. Fetch from Yahoo (with alias support)
         try {
-          const symbol = `${cleanTicker}.SN`;
-          const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
-          const response = await fetch(url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept': 'application/json'
-            }
-          });
-          if (!response.ok) {
-            return { ticker: cleanTicker, history: [] };
+          const possibleSymbols: string[] = [];
+          const aliasTicker = YAHOO_TICKER_ALIASES[cleanTicker];
+          possibleSymbols.push(`${cleanTicker}.SN`);
+          possibleSymbols.push(cleanTicker);
+          if (aliasTicker) {
+            possibleSymbols.push(`${aliasTicker}.SN`);
+            possibleSymbols.push(aliasTicker);
           }
-          const data: any = await response.json();
-          const result = data?.chart?.result?.[0];
-          if (!result) return { ticker: cleanTicker, history: [] };
 
-          const timestamps: number[] = result.timestamp || [];
-          const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
-
-          const yahooHistory: { date: string; close: number }[] = [];
-          for (let i = 0; i < timestamps.length; i++) {
-            if (closes[i] !== null && closes[i] !== undefined) {
-              const date = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
-              yahooHistory.push({ date, close: Math.round(closes[i]! * 100) / 100 });
+          let yahooHistory: { date: string; close: number }[] = [];
+          for (const sym of possibleSymbols) {
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1y`;
+            const response = await fetch(url, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json'
+              }
+            });
+            if (!response.ok) continue;
+            const data: any = await response.json();
+            const result = data?.chart?.result?.[0];
+            if (!result) continue;
+            const timestamps: number[] = result.timestamp || [];
+            const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+            for (let i = 0; i < timestamps.length; i++) {
+              if (closes[i] !== null && closes[i] !== undefined) {
+                const date = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
+                yahooHistory.push({ date, close: Math.round(closes[i]! * 100) / 100 });
+              }
             }
+            if (yahooHistory.length > 0) break;
+          }
+          if (yahooHistory.length === 0) {
+            console.warn(`[PortfolioHistory] No data for ${cleanTicker} from any symbol (tried: ${possibleSymbols.join(', ')})`);
           }
 
           // 3. Merge with existing cache: keep cached data for dates > 2 days ago (immutable),
@@ -291,7 +302,8 @@ async function startServer() {
           }
 
           return { ticker: cleanTicker, history: merged };
-        } catch {
+        } catch (err: any) {
+          console.warn(`[PortfolioHistory] Error fetching ${cleanTicker}: ${err?.message || err}`);
           return { ticker: cleanTicker, history: [] };
         }
       }));
@@ -331,32 +343,39 @@ async function startServer() {
         const cacheKey = `portfolio_history_${cleanTicker}`;
 
         try {
-          const symbol = `${cleanTicker}.SN`;
-          const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
-          const response = await fetch(url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept': 'application/json'
-            }
-          });
-          if (!response.ok) return { ticker: cleanTicker, history: [] };
-
-          const data: any = await response.json();
-          const result = data?.chart?.result?.[0];
-          if (!result) return { ticker: cleanTicker, history: [] };
-
-          const timestamps: number[] = result.timestamp || [];
-          const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+          const possibleSymbolsBf: string[] = [];
+          const aliasTickerBf = YAHOO_TICKER_ALIASES[cleanTicker];
+          possibleSymbolsBf.push(`${cleanTicker}.SN`);
+          possibleSymbolsBf.push(cleanTicker);
+          if (aliasTickerBf) {
+            possibleSymbolsBf.push(`${aliasTickerBf}.SN`);
+            possibleSymbolsBf.push(aliasTickerBf);
+          }
 
           const history: { date: string; close: number }[] = [];
-          for (let i = 0; i < timestamps.length; i++) {
-            if (closes[i] !== null && closes[i] !== undefined) {
-              const date = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
-              // Only include dates in our target range
-              if (date >= startStr && date <= endStr) {
-                history.push({ date, close: Math.round(closes[i]! * 100) / 100 });
+          for (const sym of possibleSymbolsBf) {
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1y`;
+            const response = await fetch(url, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json'
+              }
+            });
+            if (!response.ok) continue;
+            const data: any = await response.json();
+            const result = data?.chart?.result?.[0];
+            if (!result) continue;
+            const timestamps: number[] = result.timestamp || [];
+            const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+            for (let i = 0; i < timestamps.length; i++) {
+              if (closes[i] !== null && closes[i] !== undefined) {
+                const date = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
+                if (date >= startStr && date <= endStr) {
+                  history.push({ date, close: Math.round(closes[i]! * 100) / 100 });
+                }
               }
             }
+            if (history.length > 0) break;
           }
 
           // Merge with existing cache if any
@@ -421,28 +440,6 @@ async function startServer() {
 
   app.get('/api/market-stocks', async (req, res) => {
     try {
-      // 1. Check Supabase shared cache first
-      if (supabase) {
-        try {
-          const { data: cached } = await supabase
-            .from('market_data')
-            .select('data, updated_at')
-            .eq('key', 'market_stocks')
-            .single();
-
-          if (cached) {
-            const age = Date.now() - new Date(cached.updated_at).getTime();
-            if (age < CACHE_TTL) {
-              console.log('Serving market stocks from Supabase cache');
-              return res.json(cached.data);
-            }
-            console.log('Supabase cache stale, re-fetching from Yahoo');
-          }
-        } catch (err) {
-          console.warn('Supabase cache check failed, falling back to Yahoo:', err);
-        }
-      }
-
       const tickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "VAPORES", "BSANTANDER", "CMPC", "FALABELLA", "ANDINA-B"];
       
       let additionalTickers: string[] = [];
@@ -473,48 +470,11 @@ async function startServer() {
         }
       }));
 
-      // 3. Save to Supabase cache
-      if (supabase) {
-        try {
-          await supabase.from('market_data').upsert(
-            { key: 'market_stocks', data: quotes, updated_at: new Date().toISOString() },
-            { onConflict: 'key' }
-          );
-        } catch (err) {
-          console.warn('Failed to save market stocks to Supabase cache:', err);
-        }
-      }
-
       res.json(quotes);
     } catch (err: any) {
       console.error("Error fetching market-stocks proxy:", err?.message || err);
       // Fallback: send the entire backups so the client is always styling-happy and fast
       res.json(INITIAL_MARKET_STOCKS_BACKUP);
-    }
-  });
-
-  // NEW: Get cached market stocks from Supabase (instant, no Yahoo fetch)
-  app.get('/api/market-stocks-cache', async (req, res) => {
-    try {
-      if (!supabase) {
-        return res.json({ data: null, age: null });
-      }
-
-      const { data: cached } = await supabase
-        .from('market_data')
-        .select('data, updated_at')
-        .eq('key', 'market_stocks')
-        .single();
-
-      if (cached) {
-        const age = Date.now() - new Date(cached.updated_at).getTime();
-        return res.json({ data: cached.data, age });
-      }
-
-      res.json({ data: null, age: null });
-    } catch (err: any) {
-      console.warn('Error reading market stocks cache:', err?.message || err);
-      res.json({ data: null, age: null });
     }
   });
 
@@ -544,10 +504,17 @@ async function startServer() {
           if (cached) {
             const age = Date.now() - new Date(cached.updated_at).getTime();
             if (age < CACHE_TTL) {
-              console.log(`Serving ${cleanTicker} from Supabase cache`);
-              return res.json(cached.data);
+              // Validate cached data is not the hardcoded fallback
+              const cachedData = cached.data as any;
+              if (cachedData && cachedData.previousClose != null && cachedData.previousClose > 0) {
+                console.log(`Serving ${cleanTicker} from Supabase cache`);
+                return res.json(cached.data);
+              }
+              // Fallback data in cache - treat as stale, re-fetch
+              console.log(`Supabase cache invalid (fallback) for ${cleanTicker}, re-fetching from Yahoo`);
+            } else {
+              console.log(`Supabase cache stale for ${cleanTicker}, re-fetching from Yahoo`);
             }
-            console.log(`Supabase cache stale for ${cleanTicker}, re-fetching from Yahoo`);
           }
         } catch (err) {
           console.warn(`Supabase cache check failed for ${cleanTicker}, falling back to Yahoo:`, err);
@@ -556,6 +523,11 @@ async function startServer() {
 
       // 2. Fetch from Yahoo
       const data = await fetchStockPrice(cleanTicker);
+
+      // Validate: if result is hardcoded fallback (no previousClose), treat as not found
+      if (data && data.ticker && (data.previousClose == null || data.previousClose <= 0) && data.changePercent === 0) {
+        return res.status(404).json({ error: `Nemotécnico "${cleanTicker}" no encontrado en Yahoo Finance` });
+      }
 
       // 3. Save to Supabase per-ticker cache
       if (supabase) {

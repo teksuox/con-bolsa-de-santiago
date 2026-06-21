@@ -49,6 +49,14 @@ export interface MarketStock {
   volumeCLP: number;     // Volumen diario de transacciones
 }
 
+export interface SectorAllocation {
+  sector: string;
+  value: number;
+  percentage: number;
+  count: number;
+  tickers: string[];
+}
+
 export interface PortfolioSummary {
   contributedCapital: number;
   currentValue: number;

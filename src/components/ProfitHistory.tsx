@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { StockHolding } from '../types';
 import { formatCLP } from '../utils';
-import { portafolioDB, PriceHistoryRecord, DailySnapshot } from '../db';
-import { getMonthlyPnL as getMonthlyPnLCloud, saveMonthlyPnL as saveMonthlyPnLCloud, MonthlyPnLEntry } from '../lib/supabase';
+import { MonthlyPnLEntry } from '../lib/supabase';
+import { supabaseService } from '../lib/supabaseService';
 
 interface ProfitHistoryProps {
   holdings: StockHolding[];
@@ -124,23 +124,9 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
       const startStr = start.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
       const endStr = end.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
 
-      // 1. Try local IndexedDB monthly_pnl first
+      // 1. Try Supabase monthly_pnl first
       const months = getMonthsInRange(startStr, endStr);
-      const localCached = await portafolioDB.getMonthlyPnL(months);
-
-      // 2. If local is incomplete, try Supabase
-      const cached: Record<string, MonthlyPnLEntry[]> = {};
-      for (const m of months) {
-        if (localCached[m] && localCached[m].length > 0) {
-          cached[m] = localCached[m];
-        } else {
-          const cloud = await getMonthlyPnLCloud([m]);
-          if (cloud[m]) {
-            cached[m] = cloud[m];
-            await portafolioDB.saveMonthlyPnL(m, cloud[m]);
-          }
-        }
-      }
+      const cached = await supabaseService.pullMonthlyPnL(months);
 
       // Check if cached data covers the full range
       let cachedEntries: MonthlyPnLEntry[] = [];
@@ -152,11 +138,13 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
       }
       cachedEntries.sort((a, b) => a.date.localeCompare(b.date));
 
-      // Full cache hit: exclude today (comes from live dashboard)
+      // Full cache hit: exclude today (comes from live dashboard) and weekends
       const expectedDates: string[] = [];
       const d = new Date(start);
       while (d <= end) {
-        expectedDates.push(d.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' }));
+        const ds = d.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6) expectedDates.push(ds);
         d.setDate(d.getDate() + 1);
       }
       const historicalDates = expectedDates.filter(dt => dt < today);
@@ -189,14 +177,6 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
               dateMap.set(h.date, h.close);
             }
             tickerPrices.set(item.ticker, dateMap);
-            // Save to local IndexedDB cache
-            const records: PriceHistoryRecord[] = item.history.map(h => ({
-              ticker_date: `${item.ticker}_${h.date}`,
-              ticker: item.ticker,
-              date: h.date,
-              close: h.close,
-            }));
-            portafolioDB.savePriceHistory(records);
           }
         }
       } catch (err) {
@@ -304,49 +284,6 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
         prevValue = portfolioValue;
       }
 
-      // Merge daily snapshots
-      const snapshots = await portafolioDB.getDailySnapshots();
-
-      if (snapshots.length > 0) {
-        const existingDates = new Set(pnlEntries.map(e => e.date));
-        const extraEntries: typeof pnlEntries = [];
-
-        for (const s of snapshots) {
-          if (s.date < startStr || s.date > endStr) continue;
-          if (existingDates.has(s.date)) continue;
-          extraEntries.push({
-            date: s.date,
-            portfolioValue: s.portfolioValue,
-            dailyPnL: 0,
-            dailyPnLPct: 0,
-          });
-        }
-
-        if (extraEntries.length > 0) {
-          const allEntries = [...pnlEntries, ...extraEntries].sort((a, b) => a.date.localeCompare(b.date));
-          const merged: typeof pnlEntries = [];
-          for (let i = 0; i < allEntries.length; i++) {
-            const cur = allEntries[i];
-            if (i === 0) {
-              merged.push(cur);
-              continue;
-            }
-            const prev = merged[merged.length - 1];
-            if (extraEntries.some(e => e.date === cur.date) || extraEntries.some(e => e.date === prev.date)) {
-              const dailyPnL = cur.portfolioValue - prev.portfolioValue;
-              merged.push({
-                ...cur,
-                dailyPnL: Math.round(dailyPnL),
-                dailyPnLPct: Math.round((prev.portfolioValue > 0 ? (dailyPnL / prev.portfolioValue) * 100 : 0) * 100) / 100,
-              });
-            } else {
-              merged.push(cur);
-            }
-          }
-          pnlEntries = merged;
-        }
-      }
-
       if (!cancelled) {
         // Override today's P&L with live value from dashboard
         if (todayPnL !== undefined) {
@@ -368,8 +305,7 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
           byMonth.get(m)!.push(e);
         }
         for (const [m, entries] of byMonth) {
-          saveMonthlyPnLCloud(m, entries);
-          portafolioDB.saveMonthlyPnL(m, entries.map(e => ({ date: e.date, portfolioValue: e.portfolioValue, dailyPnL: e.dailyPnL, dailyPnLPct: e.dailyPnLPct })));
+          supabaseService.saveMonthlyPnL(m, entries);
         }
 
         setEntries(pnlEntries);

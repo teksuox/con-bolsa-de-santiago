@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
-import { DBBackupData } from '../db';
 import {
   Cloud,
   Save,
@@ -21,8 +20,8 @@ import {
 } from 'lucide-react';
 
 interface SupabaseSyncProps {
-  onImport: (data: DBBackupData) => void;
-  getBackupData: () => DBBackupData | null;
+  onImport: (data: any) => void;
+  getBackupData: () => any;
   onExportBackup?: () => void;
   onImportBackup?: (content: string) => Promise<void>;
   onClearAllData?: () => void;
@@ -372,9 +371,9 @@ export default function SupabaseSync({ onImport, getBackupData, onExportBackup, 
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50">
           <div className="flex items-center space-x-1.5">
             <Database className="w-4 h-4 text-slate-700" />
-            <h3 className="font-bold text-slate-800 text-sm">Base de Datos Local & Respaldo</h3>
+            <h3 className="font-bold text-slate-800 text-sm">Respaldo y Restauración</h3>
           </div>
-          <span className="text-[10px] bg-slate-100 text-slate-600 font-mono px-1.5 py-0.5 rounded font-bold">IndexedDB</span>
+          <span className="text-[10px] bg-sky-100 text-sky-700 font-mono px-1.5 py-0.5 rounded font-bold">Supabase</span>
         </div>
         <div className="p-5 space-y-3">
           <p className="text-[11px] text-slate-400 leading-relaxed">Tus datos nunca salen de tu navegador. Disfruta de total privacidad y mantén copias de seguridad.</p>

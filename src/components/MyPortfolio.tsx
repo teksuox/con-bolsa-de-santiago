@@ -48,12 +48,14 @@ export default function MyPortfolio({
   const [searchTicker, setSearchTicker] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const [searchSuccess, setSearchSuccess] = useState('');
 
   const handleSearchStock = async () => {
     const input = searchTicker.trim().toUpperCase();
     if (!input) return;
     setSearching(true);
     setSearchError('');
+    setSearchSuccess('');
     try {
       const res = await fetch(`/api/search-stock?ticker=${encodeURIComponent(input)}`);
       if (!res.ok) throw new Error('No encontrado');
@@ -64,11 +66,15 @@ export default function MyPortfolio({
         setBuyPrice(data.price);
         setAnnualTargetYield(data.dividendYield || 7.5);
         setIsCustom(false);
+        setSearchSuccess(`${data.ticker} encontrado - $${formatCLP(data.price)}`);
+        setTimeout(() => setSearchSuccess(''), 5000);
       } else {
         setSearchError('Nemotécnico no encontrado en Yahoo Finance');
+        setTimeout(() => setSearchError(''), 5000);
       }
     } catch {
       setSearchError('Nemotécnico no encontrado');
+      setTimeout(() => setSearchError(''), 5000);
     } finally {
       setSearching(false);
     }

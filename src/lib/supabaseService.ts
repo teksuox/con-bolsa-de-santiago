@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type { StockHolding, DividendPayment, TaxRefund, StockAlert, MarketStock } from '../types';
+import type { MonthlyPnLEntry } from './supabase';
 
 // ── Field conversion helpers ──
 
@@ -215,5 +216,68 @@ export const supabaseService = {
       this.pullInvestmentPlan()
     ]);
     return { holdings, dividends, refunds, alerts, customStocks, settings, investmentPlan };
+  },
+
+  // Monthly PnL
+  async pullMonthlyPnL(months: string[]): Promise<Record<string, MonthlyPnLEntry[]>> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || months.length === 0) return {};
+    const { data, error } = await supabase
+      .from('monthly_pnl')
+      .select('month, data')
+      .eq('user_id', user.id)
+      .in('month', months);
+    if (error) { console.warn('Error fetching monthly P&L:', error.message); return {}; }
+    const result: Record<string, MonthlyPnLEntry[]> = {};
+    for (const row of data || []) result[row.month] = row.data as MonthlyPnLEntry[];
+    return result;
+  },
+
+  async saveMonthlyPnL(month: string, entries: MonthlyPnLEntry[]): Promise<void> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || entries.length === 0) return;
+    const { error } = await supabase.from('monthly_pnl').upsert(
+      { user_id: user.id, month, data: entries, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,month' }
+    );
+    if (error) console.warn('Error saving monthly P&L:', error.message);
+  },
+
+  // Full backup / restore
+  async exportBackup() {
+    const all = await this.pullAll();
+    const { data: { user } } = await supabase.auth.getUser();
+    // Also fetch PnL months
+    const { data: pnlRows } = await supabase.from('monthly_pnl').select('month, data').eq('user_id', user!.id);
+    const pnls: Record<string, MonthlyPnLEntry[]> = {};
+    for (const r of pnlRows || []) pnls[r.month] = r.data as MonthlyPnLEntry[];
+    return { ...all, monthlyPnl: pnls };
+  },
+
+  async importBackup(data: any) {
+    const uid = await userIdOrThrow();
+    // Holdings
+    for (const h of data.holdings || []) await this.syncHolding(h);
+    for (const d of data.dividends || []) await this.syncDividend(d);
+    for (const r of data.refunds || []) await this.syncRefund(r);
+    for (const a of data.alerts || []) await this.syncAlert(a);
+    for (const s of data.customStocks || []) await this.syncCustomStock(s);
+    if (data.settings?.annualPerformancePercent != null) await this.syncSettings(data.settings);
+    if (data.investmentPlan) await this.syncInvestmentPlan(data.investmentPlan);
+    // Monthly PnL
+    if (data.monthlyPnl) {
+      for (const [month, entries] of Object.entries(data.monthlyPnl)) {
+        await this.saveMonthlyPnL(month, entries as MonthlyPnLEntry[]);
+      }
+    }
+  },
+
+  async clearAllData() {
+    const uid = await userIdOrThrow();
+    const tables = ['holdings', 'dividends', 'refunds', 'alerts', 'custom_stocks', 'settings', 'investment_plans', 'monthly_pnl'];
+    for (const t of tables) {
+      const { error } = await supabase.from(t).delete().eq('user_id', uid);
+      if (error) console.warn(`Error clearing ${t}:`, error.message);
+    }
   }
 };
