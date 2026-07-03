@@ -99,7 +99,7 @@ function userIdOrThrow(): Promise<string> {
 
 async function upsertRows(table: string, rows: any[], conflict: string) {
   const { error } = await supabase.from(table).upsert(rows, { onConflict: conflict });
-  if (error) console.warn(`supabaseService.upsert(${table}):`, error.message);
+  if (error) throw new Error(`Error al guardar en ${table}: ${error.message}`);
 }
 
 async function fetchRows<T>(table: string, toTS: (r: any) => T, since?: string): Promise<T[]> {
@@ -114,7 +114,7 @@ async function fetchRows<T>(table: string, toTS: (r: any) => T, since?: string):
 async function deleteRow(table: string, idCol: string, id: string) {
   const uid = await userIdOrThrow();
   const { error } = await supabase.from(table).delete().eq('user_id', uid).eq(idCol, id);
-  if (error) console.warn(`supabaseService.delete(${table}):`, error.message);
+  if (error) throw new Error(`Error al eliminar de ${table}: ${error.message}`);
 }
 
 // ── Public API ──
@@ -122,7 +122,7 @@ async function deleteRow(table: string, idCol: string, id: string) {
 export const supabaseService = {
   // Holdings
   syncHolding(h: StockHolding) {
-    return userIdOrThrow().then(uid => upsertRows('holdings', [holdingToRow(h, uid)], 'id'));
+    return userIdOrThrow().then(uid => upsertRows('holdings', [holdingToRow(h, uid)], 'user_id,id'));
   },
   pullHoldings(since?: string) {
     return fetchRows('holdings', rowToHolding, since);
@@ -133,7 +133,7 @@ export const supabaseService = {
 
   // Dividends
   syncDividend(d: DividendPayment) {
-    return userIdOrThrow().then(uid => upsertRows('dividends', [dividendToRow(d, uid)], 'id'));
+    return userIdOrThrow().then(uid => upsertRows('dividends', [dividendToRow(d, uid)], 'user_id,id'));
   },
   pullDividends(since?: string) {
     return fetchRows('dividends', rowToDividend, since);
@@ -144,7 +144,7 @@ export const supabaseService = {
 
   // Tax Refunds
   syncRefund(rf: TaxRefund) {
-    return userIdOrThrow().then(uid => upsertRows('refunds', [refundToRow(rf, uid)], 'id'));
+    return userIdOrThrow().then(uid => upsertRows('refunds', [refundToRow(rf, uid)], 'user_id,id'));
   },
   pullRefunds(since?: string) {
     return fetchRows('refunds', rowToRefund, since);

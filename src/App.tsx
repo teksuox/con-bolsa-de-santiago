@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Bell } from 'lucide-react';
+import { X, Bell, AlertTriangle } from 'lucide-react';
 import Header from './components/Header';
 import MyPortfolio from './components/MyPortfolio';
 import MarketWatch from './components/MarketWatch';
@@ -13,6 +13,7 @@ import DividendTracker from './components/DividendTracker';
 import TaxRefunds from './components/TaxRefunds';
 import ChartsAndAnalytics from './components/ChartsAndAnalytics';
 import SupabaseSync from './components/SupabaseSync';
+import LoginPage from './components/LoginPage';
 import HistoryPage from './components/HistoryPage';
 import InvestmentPlan from './components/InvestmentPlan';
 import { supabase } from './lib/supabase';
@@ -31,6 +32,18 @@ function dedupeCustomStocks(stocks: MarketStock[]): MarketStock[] {
       seen.add(cs.ticker);
       return true;
     });
+}
+
+function mergeByUpdatedAt<T extends { id: string; updatedAt?: string }>(local: T[], cloud: T[]): T[] {
+  const map = new Map<string, T>();
+  for (const item of local) map.set(item.id, item);
+  for (const item of cloud) {
+    const existing = map.get(item.id);
+    if (!existing || (existing.updatedAt || '') < (item.updatedAt || '')) {
+      map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values());
 }
 
 export default function App() {
@@ -132,6 +145,20 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [investmentPlanRefreshKey, setInvestmentPlanRefreshKey] = useState(0);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  function trackSyncError(label: string, err: any) {
+    const msg = err?.message || String(err || 'Error desconocido');
+    console.warn(`sync ${label}:`, msg);
+    setSyncError(`Error al sincronizar "${label}": ${msg}`);
+    setTimeout(() => setSyncError(null), 10000);
+  }
+
+  // Persist user data to localStorage as fallback
+  useEffect(() => { try { localStorage.setItem('holdings_backup', JSON.stringify(holdings)); } catch {} }, [holdings]);
+  useEffect(() => { try { localStorage.setItem('dividends_backup', JSON.stringify(dividends)); } catch {} }, [dividends]);
+  useEffect(() => { try { localStorage.setItem('refunds_backup', JSON.stringify(refunds)); } catch {} }, [refunds]);
+  useEffect(() => { try { localStorage.setItem('alerts_backup', JSON.stringify(alerts)); } catch {} }, [alerts]);
 
   // Ref for background refresh to always use latest holdings (avoids stale closure)
   const holdingsRef = useRef(holdings);
@@ -373,17 +400,56 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
   useEffect(() => {
     async function loadData() {
       try {
+        // Restore from localStorage fallback immediately
+        try {
+          const savedHoldings = localStorage.getItem('holdings_backup');
+          if (savedHoldings) { const p = JSON.parse(savedHoldings); if (Array.isArray(p)) setHoldings(p); }
+        } catch {}
+        try {
+          const savedDividends = localStorage.getItem('dividends_backup');
+          if (savedDividends) { const p = JSON.parse(savedDividends); if (Array.isArray(p)) setDividends(p); }
+        } catch {}
+        try {
+          const savedRefunds = localStorage.getItem('refunds_backup');
+          if (savedRefunds) { const p = JSON.parse(savedRefunds); if (Array.isArray(p)) setRefunds(p); }
+        } catch {}
+        try {
+          const savedAlerts = localStorage.getItem('alerts_backup');
+          if (savedAlerts) { const p = JSON.parse(savedAlerts); if (Array.isArray(p)) setAlerts(p); }
+        } catch {}
+        try {
+          const savedPct = localStorage.getItem('annual_percent_backup');
+          if (savedPct) setAnnualPerformancePercent(Number(savedPct));
+        } catch {}
+
         const { data: { session } } = await supabase.auth.getSession();
         const user = session?.user ?? null;
-        setSupabaseUser(user);
 
         let cloud: Awaited<ReturnType<typeof supabaseService.pullAll>> | null = null;
         if (user) {
           cloud = await supabaseService.pullAll();
-          setHoldings(cloud.holdings);
-          setDividends(cloud.dividends);
-          setRefunds(cloud.refunds);
-          if (cloud.alerts.length > 0) setAlerts(cloud.alerts);
+          // Merge cloud into local (localStorage-backed) state: newer updatedAt wins
+          if (cloud.holdings.length > 0) {
+            setHoldings(prev => mergeByUpdatedAt(prev, cloud!.holdings));
+          }
+          if (cloud.dividends.length > 0) {
+            setDividends(prev => mergeByUpdatedAt(prev, cloud!.dividends));
+          }
+          if (cloud.refunds.length > 0) {
+            setRefunds(prev => mergeByUpdatedAt(prev, cloud!.refunds));
+          }
+          if (cloud.alerts.length > 0) {
+            setAlerts(prev => {
+              const alertMap = new Map(prev.map(a => [a.ticker, a]));
+              for (const ca of cloud!.alerts) {
+                const existing = alertMap.get(ca.ticker);
+                if (!existing || (existing.updatedAt || '') < (ca.updatedAt || '')) {
+                  alertMap.set(ca.ticker, ca);
+                }
+              }
+              return Array.from(alertMap.values());
+            });
+          }
           if (cloud.settings?.annualPerformancePercent) setAnnualPerformancePercent(cloud.settings.annualPerformancePercent);
         }
 
@@ -507,15 +573,24 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     loadData();
   }, []);
 
-  // Listen to Supabase Auth
   const [supabaseUser, setSupabaseUser] = useState<any>(null);
+  const [showLoginPage, setShowLoginPage] = useState(false);
+  const prevSessionRef = useRef<any>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSupabaseUser(session?.user ?? null);
+      prevSessionRef.current = session?.user ?? null;
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSupabaseUser(session?.user ?? null);
+      const prev = prevSessionRef.current;
+      const current = session?.user ?? null;
+      prevSessionRef.current = current;
+      setSupabaseUser(current);
+      // Detect session loss: was logged in, now logged out
+      if (prev && !current) {
+        setShowLoginPage(true);
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -602,10 +677,21 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     }
 
     const cleanup = subscribeToChanges(supabaseUser.id, {
-      onHoldingsChanged: (data) => { setHoldings(data); },
-      onDividendsChanged: (data) => { setDividends(data); },
-      onRefundsChanged: (data) => { setRefunds(data); },
-      onAlertsChanged: (data) => { setAlerts(data); },
+      onHoldingsChanged: (data) => { setHoldings(prev => mergeByUpdatedAt(prev, data)); },
+      onDividendsChanged: (data) => { setDividends(prev => mergeByUpdatedAt(prev, data)); },
+      onRefundsChanged: (data) => { setRefunds(prev => mergeByUpdatedAt(prev, data)); },
+      onAlertsChanged: (data) => {
+        setAlerts(prev => {
+          const alertMap = new Map(prev.map(a => [a.ticker, a]));
+          for (const ca of data) {
+            const existing = alertMap.get(ca.ticker);
+            if (!existing || (existing.updatedAt || '') < (ca.updatedAt || '')) {
+              alertMap.set(ca.ticker, ca);
+            }
+          }
+          return Array.from(alertMap.values());
+        });
+      },
       onCustomStocksChanged: (data) => {
         const deduped = dedupeCustomStocks(data);
         setMarketStocks(deduped);
@@ -666,8 +752,9 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     // Optimistic UI state update
     const updatedHoldings = [...holdings, holding];
     setHoldings(updatedHoldings);
+    try { localStorage.setItem('holdings_backup', JSON.stringify(updatedHoldings)); } catch {}
     // Sync to Supabase per-record
-    supabaseService.syncHolding(holding).catch(e => console.warn('sync addHolding:', e));
+    supabaseService.syncHolding(holding).catch(e => trackSyncError('addHolding', e));
 
     // Auto sync actual dividends from the exchange!
     await handleSyncDividends(updatedHoldings);
@@ -685,7 +772,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     }));
 
     if (targetHolding) {
-      supabaseService.syncHolding({ ...targetHolding, manualPrice: true }).catch(e => console.warn('sync updatePrice:', e));
+      supabaseService.syncHolding({ ...targetHolding, manualPrice: true }).catch(e => trackSyncError('updatePrice', e));
       
       // Update corresponding reference price in market stock list
       setMarketStocks(prev => prev.map(m => {
@@ -701,7 +788,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     setHoldings(prev => prev.map(h => {
       if (h.id === id) {
         const updated = { ...h, manualPrice: false };
-        supabaseService.syncHolding(updated).catch(e => console.warn('sync resetManual:', e));
+        supabaseService.syncHolding(updated).catch(e => trackSyncError('resetManual', e));
         return updated;
       }
       return h;
@@ -720,13 +807,13 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     }));
 
     if (targetHolding) {
-      supabaseService.syncHolding(targetHolding).catch(e => console.warn('sync updateYield:', e));
+      supabaseService.syncHolding(targetHolding).catch(e => trackSyncError('updateYield', e));
     }
   };
 
   const handleDeleteHolding = async (id: string) => {
     setHoldings(prev => prev.filter(h => h.id !== id));
-    supabaseService.deleteHolding(id).catch(e => console.warn('sync deleteHolding:', e));
+    supabaseService.deleteHolding(id).catch(e => trackSyncError('deleteHolding', e));
   };
 
   // Handlers for Dividends
@@ -735,7 +822,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     const div: DividendPayment = { ...newDiv, id };
     
     setDividends(prev => [div, ...prev]);
-    supabaseService.syncDividend(div).catch(e => console.warn('sync addDividend:', e));
+    supabaseService.syncDividend(div).catch(e => trackSyncError('addDividend', e));
   };
 
   const handleUpdateDividend = async (id: string, updates: Partial<DividendPayment>) => {
@@ -752,9 +839,9 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     }));
     if (updated) {
       if (id !== updated.id) {
-        supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
+        supabaseService.deleteDividend(id).catch(e => trackSyncError('deleteDividend', e));
       }
-      supabaseService.syncDividend(updated).catch(e => console.warn('sync updateDividend:', e));
+      supabaseService.syncDividend(updated).catch(e => trackSyncError('updateDividend', e));
     }
   };
 
@@ -773,15 +860,15 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
 
     if (targetDiv) {
       if (id !== targetDiv.id) {
-        supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
+        supabaseService.deleteDividend(id).catch(e => trackSyncError('deleteDividend', e));
       }
-      supabaseService.syncDividend(targetDiv).catch(e => console.warn('sync toggleReceived:', e));
+      supabaseService.syncDividend(targetDiv).catch(e => trackSyncError('toggleReceived', e));
     }
   };
 
   const handleDeleteDividend = async (id: string) => {
     setDividends(prev => prev.filter(d => d.id !== id));
-    supabaseService.deleteDividend(id).catch(e => console.warn('sync deleteDividend:', e));
+    supabaseService.deleteDividend(id).catch(e => trackSyncError('deleteDividend', e));
   };
 
   // Handlers for Tax Refunds
@@ -790,17 +877,18 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     const ref: TaxRefund = { ...newRefund, id };
     
     setRefunds(prev => [ref, ...prev]);
-    supabaseService.syncRefund(ref).catch(e => console.warn('sync addRefund:', e));
+    supabaseService.syncRefund(ref).catch(e => trackSyncError('addRefund', e));
   };
 
   const handleDeleteRefund = async (id: string) => {
     setRefunds(prev => prev.filter(r => r.id !== id));
-    supabaseService.deleteRefund(id).catch(e => console.warn('sync deleteRefund:', e));
+    supabaseService.deleteRefund(id).catch(e => trackSyncError('deleteRefund', e));
   };
 
   const handleSetAnnualPerformancePercent = async (val: number) => {
     setAnnualPerformancePercent(val);
-    supabaseService.syncSettings({ annualPerformancePercent: val }).catch(e => console.warn('sync settings:', e));
+    try { localStorage.setItem('annual_percent_backup', String(val)); } catch {}
+    supabaseService.syncSettings({ annualPerformancePercent: val }).catch(e => trackSyncError('configuración', e));
   };
 
 
@@ -893,11 +981,11 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
       const exists = prev.find(a => a.ticker === ticker);
       if (exists) {
         const updated = prev.filter(a => a.ticker !== ticker);
-        supabaseService.deleteAlert(ticker).catch(e => console.warn('sync deleteAlert:', e));
+        supabaseService.deleteAlert(ticker).catch(e => trackSyncError('deleteAlert', e));
         return updated;
       }
       const newAlert: StockAlert = { ticker, targetPrice: currentPrice * 0.95, starredPrice: currentPrice, triggered: false };
-      supabaseService.syncAlert(newAlert).catch(e => console.warn('sync addAlert:', e));
+      supabaseService.syncAlert(newAlert).catch(e => trackSyncError('addAlert', e));
       return [...prev, newAlert];
     });
   };
@@ -906,7 +994,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     setAlerts(prev => prev.map(a => {
       if (a.ticker === ticker) {
         const updated = { ...a, targetPrice };
-        supabaseService.syncAlert(updated).catch(e => console.warn('sync updateTarget:', e));
+        supabaseService.syncAlert(updated).catch(e => trackSyncError('updateTarget', e));
         return updated;
       }
       return a;
@@ -919,7 +1007,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     setAlerts(prev => prev.map(a => {
       if (a.ticker === ticker) {
         const updated = { ...a, targetPrice: stock.price * 0.95, triggered: false, starredPrice: stock.price };
-        supabaseService.syncAlert(updated).catch(e => console.warn('sync resetAlert:', e));
+        supabaseService.syncAlert(updated).catch(e => trackSyncError('resetAlert', e));
         return updated;
       }
       return a;
@@ -957,7 +1045,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     }
 
     // Sync custom stock to Supabase per-record
-    supabaseService.syncCustomStock(normalizedStock).catch(e => console.warn('sync customStock:', e));
+    supabaseService.syncCustomStock(normalizedStock).catch(e => trackSyncError('customStock', e));
 
     setMarketStocks(prev => {
       if (prev.some(s => s.ticker === normalizedTicker)) return prev;
@@ -1038,7 +1126,27 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     }));
   })();
 
+  const handleLogin = (cloudData?: any) => {
+    setShowLoginPage(false);
+    if (cloudData) {
+      setHoldings(cloudData.holdings || []);
+      setDividends(cloudData.dividends || []);
+      setRefunds(cloudData.refunds || []);
+      if (cloudData.annualPerformancePercent) setAnnualPerformancePercent(cloudData.annualPerformancePercent);
+      if (cloudData.customStocks?.length) {
+        const deduped = dedupeCustomStocks(cloudData.customStocks);
+        setMarketStocks(deduped);
+        setSearchedTickers(new Set(deduped.map((s: MarketStock) => normalizeTicker(s.ticker))));
+        try { localStorage.setItem('custom_searched_stocks', JSON.stringify(deduped)); } catch {}
+      }
+      if (cloudData.alerts?.length) setAlerts(cloudData.alerts);
+    }
+  };
+
   return (
+    showLoginPage ? (
+      <LoginPage onLogin={handleLogin} />
+    ) : (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-teal-500 selection:text-slate-900">
       <Header
         activeTab={activeTab}
@@ -1048,6 +1156,18 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
       />
 
       <main className="flex-1 max-w-[1400px] w-full mx-auto p-4 md:p-6 lg:p-8">
+        {syncError && (
+          <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-800 flex items-start gap-2 shadow-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
+            <div>
+              <span className="font-bold block">Error de sincronización</span>
+              <span>{syncError}</span>
+            </div>
+            <button onClick={() => setSyncError(null)} className="ml-auto shrink-0 text-rose-400 hover:text-rose-600 cursor-pointer">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {isLoading ? (
           <div className="min-h-[50vh] flex flex-col items-center justify-center space-y-4">
             <div className="w-10 h-10 border-4 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
@@ -1250,5 +1370,6 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
         <p>Software libre para la <span className="text-slate-400">Comunidad Financiera de Chile</span>. Datos con fines educativos e informativos &mdash; no constituye asesoría de inversión. <span className="text-slate-400">#InversiónConsciente</span></p>
       </footer>
     </div>
+  )
   );
 }
