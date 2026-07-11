@@ -365,8 +365,9 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
   let totalPnLPct: number | null = null;
   if (entries.length > 0) {
     const periodStartValue = entries[0].portfolioValue - entries[0].dailyPnL;
+    const lastEntryDate = entries[entries.length - 1].date;
     const newInvestments = holdings
-      .filter(h => h.buyDate > entries[0].date)
+      .filter(h => h.buyDate > entries[0].date && h.buyDate <= lastEntryDate)
       .reduce((sum, h) => sum + (h.shares * h.buyPrice), 0);
     const adjustedStart = periodStartValue + newInvestments;
     totalPnL = endValue - adjustedStart;

@@ -168,9 +168,11 @@ export default function App() {
     lastDividendSyncRef.current = key;
     setDividends(prev => prev.map(d => {
       if (d.received) return d;
-      const h = holdings.find(h => h.ticker === d.ticker);
-      if (!h || h.shares === d.sharesCount) return d;
-      return { ...d, sharesCount: h.shares, totalAmount: Math.round(h.shares * d.amountPerShare), estimated: true };
+      const totalShares = holdings
+        .filter(h => h.ticker === d.ticker)
+        .reduce((sum, h) => sum + h.shares, 0);
+      if (totalShares === 0 || totalShares === d.sharesCount) return d;
+      return { ...d, sharesCount: totalShares, totalAmount: Math.round(totalShares * d.amountPerShare), estimated: true };
     }));
   }, [holdings]);
 
@@ -574,7 +576,12 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
           if (response.ok) {
             const synced = await response.json();
             if (Array.isArray(synced) && synced.length > 0) {
-              setDividends(synced);
+              setDividends(prev => {
+                const manuals = prev.filter(d => !d.id.startsWith('div-sys-'));
+                const sysKeys = new Set(synced.map((s: any) => `${s.ticker}-${s.payoutDate}-${s.cutoffDate || ''}`));
+                const filteredManuals = manuals.filter(m => !sysKeys.has(`${m.ticker}-${m.payoutDate}-${m.cutoffDate || ''}`));
+                return [...synced, ...filteredManuals];
+              });
             }
           }
         }
