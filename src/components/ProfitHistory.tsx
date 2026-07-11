@@ -39,6 +39,8 @@ function getFirstOfYear(d: Date): Date {
   return new Date(d.getFullYear(), 0, 1);
 }
 
+const PNL_CACHE_VERSION = 2;
+
 export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps) {
   const [filter, setFilter] = useState<DateFilter>('month');
   const [customStart, setCustomStart] = useState('');
@@ -49,15 +51,22 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
-          if (parsed.entries && parsed.entries.length > 0) return parsed.entries;
+          if (parsed.entries && parsed.entries.length > 0 && parsed.version === PNL_CACHE_VERSION) return parsed.entries;
         } catch {}
       }
     }
     return [];
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [forceRefresh, setForceRefresh] = useState(0);
 
   const cacheRef = useRef<PnLEntry[]>(entries);
+
+  const holdingsKey = useMemo(() =>
+    holdings.map(h => `${h.id}:${h.ticker}:${h.shares}:${h.buyPrice}:${h.buyDate}`).join('|'),
+    [holdings]
+  );
+  const lastHoldingsKeyRef = useRef(holdingsKey);
 
   const today = getChileDateStr();
 
@@ -102,6 +111,12 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
         setIsLoading(true);
       }
 
+      // Skip fetch when custom filter activated but no dates chosen yet
+      if (filter === 'custom' && !customStart && !customEnd) {
+        if (!cancelled) { setEntries([]); setIsLoading(false); }
+        return;
+      }
+
       const now = new Date();
       let start: Date;
       let end = now;
@@ -121,53 +136,73 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
           start = getFirstOfMonth(now);
       }
 
-      const startStr = start.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+      let startStr = start.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
       const endStr = end.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
 
-      // 1. Try Supabase monthly_pnl first
-      const months = getMonthsInRange(startStr, endStr);
-      const cached = await supabaseService.pullMonthlyPnL(months);
+      // Clamp start to the earliest investment date (no data needed before that)
+      if (holdings.length > 0) {
+        const earliestBuy = holdings.reduce((earliest, h) => h.buyDate < earliest ? h.buyDate : earliest, holdings[0].buyDate);
+        if (startStr < earliestBuy) {
+          startStr = earliestBuy;
+          start = new Date(earliestBuy + 'T12:00:00');
+        }
+      }
 
-      // Check if cached data covers the full range
+      const holdingsChanged = holdingsKey !== lastHoldingsKeyRef.current;
+      const versionChanged = typeof window !== 'undefined' && localStorage.getItem('pnlCacheVersion') !== String(PNL_CACHE_VERSION);
+      const skipCache = holdingsChanged || versionChanged || forceRefresh > 0;
       let cachedEntries: MonthlyPnLEntry[] = [];
-      for (const m of months) {
-        const monthData = cached[m];
-        if (monthData) {
-          cachedEntries = cachedEntries.concat(monthData.filter(e => e.date >= startStr && e.date <= endStr));
+
+      // 1. Try Supabase monthly_pnl first (skip if holdings/version changed or refresh forced)
+      if (!skipCache) {
+        const months = getMonthsInRange(startStr, endStr);
+        const cached = await supabaseService.pullMonthlyPnL(months);
+
+        for (const m of months) {
+          const monthData = cached[m];
+          if (monthData) {
+            cachedEntries = cachedEntries.concat(monthData.filter(e => e.date >= startStr && e.date <= endStr));
+          }
+        }
+        cachedEntries.sort((a, b) => a.date.localeCompare(b.date));
+
+        // Full cache hit: exclude today (comes from live dashboard) and weekends
+        const expectedDates: string[] = [];
+        const d = new Date(start);
+        while (d <= end) {
+          const ds = d.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+          const dow = d.getDay();
+          if (dow !== 0 && dow !== 6) expectedDates.push(ds);
+          d.setDate(d.getDate() + 1);
+        }
+        const historicalDates = expectedDates.filter(dt => dt < today);
+        const cachedDates = new Set(cachedEntries.map(e => e.date));
+        const coveredRatio = historicalDates.length > 0
+          ? historicalDates.filter(dt => cachedDates.has(dt)).length / historicalDates.length
+          : 1;
+
+        // Force refresh if the most recent trading day is missing from cache
+        const maxHistoricalDate = historicalDates.length > 0 ? historicalDates[historicalDates.length - 1] : '';
+        const maxCachedDate = cachedDates.size > 0 ? Array.from(cachedDates).sort().pop()! : '';
+        const missingLatestDay = maxHistoricalDate > maxCachedDate;
+
+        if (coveredRatio >= 0.7 && !missingLatestDay) {
+          if (!cancelled) {
+            cacheRef.current = cachedEntries;
+            lastHoldingsKeyRef.current = holdingsKey;
+            sessionStorage.setItem('profitHistoryCache', JSON.stringify({ entries: cachedEntries, version: PNL_CACHE_VERSION }));
+            localStorage.setItem('pnlCacheVersion', String(PNL_CACHE_VERSION));
+            setEntries(cachedEntries);
+            setIsLoading(false);
+          }
+          return;
         }
       }
-      cachedEntries.sort((a, b) => a.date.localeCompare(b.date));
 
-      // Full cache hit: exclude today (comes from live dashboard) and weekends
-      const expectedDates: string[] = [];
-      const d = new Date(start);
-      while (d <= end) {
-        const ds = d.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
-        const dow = d.getDay();
-        if (dow !== 0 && dow !== 6) expectedDates.push(ds);
-        d.setDate(d.getDate() + 1);
-      }
-      const historicalDates = expectedDates.filter(dt => dt < today);
-      const cachedDates = new Set(cachedEntries.map(e => e.date));
-      const coveredRatio = historicalDates.length > 0
-        ? historicalDates.filter(dt => cachedDates.has(dt)).length / historicalDates.length
-        : 1;
-
-      if (coveredRatio >= 0.7) {
-        // Full cache hit
-        if (!cancelled) {
-          cacheRef.current = cachedEntries;
-          sessionStorage.setItem('profitHistoryCache', JSON.stringify({ entries: cachedEntries }));
-          setEntries(cachedEntries);
-          setIsLoading(false);
-        }
-        return;
-      }
-
-      // 2. Cache miss — fetch from Yahoo and calculate
+      // 2. Cache miss (or holdings changed) — fetch from Yahoo and calculate
       let tickerPrices = new Map<string, Map<string, number>>();
       try {
-        const res = await fetch(`/api/portfolio-history?tickers=${encodeURIComponent(uniqueTickers.join(','))}`);
+        const res = await fetch(`/api/portfolio-history?tickers=${encodeURIComponent(uniqueTickers.join(','))}&startDate=${startStr}&endDate=${endStr}`);
         if (res.ok) {
           const data: { ticker: string; history: { date: string; close: number }[] }[] = await res.json();
           for (const item of data) {
@@ -216,14 +251,16 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
       const holdingsAccounted = new Set<string>();
       for (const h of holdings) {
         if (h.buyDate >= firstDate) continue;
-        holdingsAccounted.add(h.id);
         const priceMap = tickerPrices.get(h.ticker);
         if (!priceMap) continue;
         const tickerDates = Array.from(priceMap.keys()).sort();
         const prevDate = prevDateStr(tickerDates, firstDate);
         if (prevDate) {
           const close = priceMap.get(prevDate);
-          if (close && close > 0) initialPortfolioValue += h.shares * close;
+          if (close && close > 0) {
+            initialPortfolioValue += h.shares * close;
+            holdingsAccounted.add(h.id);
+          }
         }
       }
 
@@ -310,28 +347,29 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
 
         setEntries(pnlEntries);
         cacheRef.current = pnlEntries;
-        sessionStorage.setItem('profitHistoryCache', JSON.stringify({ entries: pnlEntries }));
+        lastHoldingsKeyRef.current = holdingsKey;
+        sessionStorage.setItem('profitHistoryCache', JSON.stringify({ entries: pnlEntries, version: PNL_CACHE_VERSION }));
+        localStorage.setItem('pnlCacheVersion', String(PNL_CACHE_VERSION));
         setIsLoading(false);
       }
     }
 
     load();
     return () => { cancelled = true; };
-  }, [uniqueTickers, filter, customStart, customEnd]);
+  }, [uniqueTickers, filter, customStart, customEnd, holdingsKey, forceRefresh]);
 
   // Total P&L for the selected period:
-  // currentValue - (periodStartValue + newInvestmentsAfterFirstDate)
-  const currentValue = holdings.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0);
+  // Use last entry's portfolioValue (Yahoo close prices), not stale current_price from holdings
+  const endValue = entries.length > 0 ? entries[entries.length - 1].portfolioValue : 0;
   let totalPnL = 0;
   let totalPnLPct: number | null = null;
   if (entries.length > 0) {
     const periodStartValue = entries[0].portfolioValue - entries[0].dailyPnL;
-    // Holdings bought strictly after the first entry date (not accounted in periodStartValue)
     const newInvestments = holdings
       .filter(h => h.buyDate > entries[0].date)
       .reduce((sum, h) => sum + (h.shares * h.buyPrice), 0);
     const adjustedStart = periodStartValue + newInvestments;
-    totalPnL = currentValue - adjustedStart;
+    totalPnL = endValue - adjustedStart;
     totalPnLPct = adjustedStart > 0 ? (totalPnL / adjustedStart) * 100 : null;
   }
 
@@ -357,6 +395,12 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
             {f === 'month' ? 'Mes' : f === 'year' ? 'Año' : 'Personalizado'}
           </button>
         ))}
+        <button
+          onClick={() => setForceRefresh(n => n + 1)}
+          className="px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer bg-amber-100 text-amber-700 hover:bg-amber-200 border border-amber-200 ml-auto"
+        >
+          Recalcular
+        </button>
         {filter === 'custom' && (
           <div className="flex items-center gap-2 ml-2">
             <input

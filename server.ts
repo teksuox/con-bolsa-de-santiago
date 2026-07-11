@@ -182,6 +182,8 @@ async function startServer() {
         return res.status(400).json({ error: "Debe proveer tickers separados por coma" });
       }
       const tickers = tickersParam.split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+      const startDateParam = req.query.startDate;
+      const endDateParam = req.query.endDate;
 
       const results = await Promise.all(tickers.map(async (ticker) => {
         const cleanTicker = ticker.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -195,8 +197,8 @@ async function startServer() {
         };
         const twoDaysAgo = daysAgo(2);
 
-        // 1. Check Supabase cache
-        if (supabase) {
+        // 1. Check Supabase cache (skip when explicit date range requested — need fresh data)
+        if (supabase && !startDateParam && !endDateParam) {
           try {
             const { data: cached } = await supabase
               .from('market_data')
@@ -232,7 +234,10 @@ async function startServer() {
 
           let yahooHistory: { date: string; close: number }[] = [];
           for (const sym of possibleSymbols) {
-            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1y`;
+            const yahooRange = startDateParam && endDateParam
+              ? `period1=${Math.floor(new Date(startDateParam + 'T12:00:00').getTime() / 1000)}&period2=${Math.floor(new Date(endDateParam + 'T12:00:00').getTime() / 1000)}`
+              : 'range=1y';
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&${yahooRange}`;
             const response = await fetch(url, {
               headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',

@@ -160,6 +160,20 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem('refunds_backup', JSON.stringify(refunds)); } catch {} }, [refunds]);
   useEffect(() => { try { localStorage.setItem('alerts_backup', JSON.stringify(alerts)); } catch {} }, [alerts]);
 
+  // Auto-update dividend amounts when holdings shares change
+  const lastDividendSyncRef = useRef('');
+  useEffect(() => {
+    const key = holdings.map(h => `${h.ticker}:${h.shares}`).join('|');
+    if (key === lastDividendSyncRef.current) return;
+    lastDividendSyncRef.current = key;
+    setDividends(prev => prev.map(d => {
+      if (d.received) return d;
+      const h = holdings.find(h => h.ticker === d.ticker);
+      if (!h || h.shares === d.sharesCount) return d;
+      return { ...d, sharesCount: h.shares, totalAmount: Math.round(h.shares * d.amountPerShare), estimated: true };
+    }));
+  }, [holdings]);
+
   // Ref for background refresh to always use latest holdings (avoids stale closure)
   const holdingsRef = useRef(holdings);
   holdingsRef.current = holdings;
@@ -582,18 +596,31 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
       setSupabaseUser(session?.user ?? null);
       prevSessionRef.current = session?.user ?? null;
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       const prev = prevSessionRef.current;
       const current = session?.user ?? null;
       prevSessionRef.current = current;
       setSupabaseUser(current);
-      // Detect session loss: was logged in, now logged out
-      if (prev && !current) {
+      if (prev && !current || event === 'SIGNED_OUT') {
         setShowLoginPage(true);
       }
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // Heartbeat: check session every 30s to detect silent token expiry
+  useEffect(() => {
+    if (!supabaseUser) return;
+    const interval = setInterval(async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user && supabaseUser) {
+        prevSessionRef.current = null;
+        setSupabaseUser(null);
+        setShowLoginPage(true);
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [supabaseUser]);
 
   // Auto-sync from Supabase on mount (incremental per-entity)
   useEffect(() => {
@@ -955,6 +982,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
       } catch (e) {
         console.warn(e);
       }
+      try { localStorage.removeItem('investment_plan_backup'); } catch {}
     } catch (err) {
       console.error('Error clearing data:', err);
       alert('No se pudo borrar los datos locales.');

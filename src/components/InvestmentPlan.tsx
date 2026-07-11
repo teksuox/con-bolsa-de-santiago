@@ -25,6 +25,15 @@ export default function InvestmentPlan({ marketStocks, refreshKey }: InvestmentP
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    // Load from localStorage fallback first
+    try {
+      const saved = localStorage.getItem('investment_plan_backup');
+      if (saved) {
+        const p = JSON.parse(saved);
+        if (p.budget != null) setBudget(p.budget);
+        if (Array.isArray(p.allocations)) setAllocations(p.allocations);
+      }
+    } catch {}
     supabaseService.pullInvestmentPlan().then(plan => {
       if (plan) {
         setBudget(plan.budget ?? 1000000);
@@ -50,6 +59,7 @@ export default function InvestmentPlan({ marketStocks, refreshKey }: InvestmentP
     if (key === lastSyncKeyRef.current) return;
     lastSyncKeyRef.current = key;
     supabaseService.syncInvestmentPlan({ budget, allocations }).catch(() => {});
+    try { localStorage.setItem('investment_plan_backup', JSON.stringify({ budget, allocations })); } catch {}
   }, [budget, allocations, loaded]);
 
   const [selectedTicker, setSelectedTicker] = useState('');
