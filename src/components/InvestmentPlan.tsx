@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { StockHolding } from '../types';
 import { formatCLP } from '../utils';
 import { supabaseService } from '../lib/supabaseService';
@@ -27,8 +27,27 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
   const [overrideCapitalValue, setOverrideCapitalValue] = useState('');
   const [monthlyStr, setMonthlyStr] = useState('300.000');
   const [increaseStr, setIncreaseStr] = useState('20.000');
-  const [personalTaxRate, setPersonalTaxRate] = useState(0);
   const [planTab, setPlanTab] = useState<'asignacion' | 'proyeccion'>('asignacion');
+
+  // Tramos Global Complementario AT 2026 (LIR Art. 52)
+  const TAX_BRACKETS = useMemo(() => [
+    { limit: 11265804, rate: 0, rebate: 0 },
+    { limit: 25035120, rate: 0.04, rebate: 450632 },
+    { limit: 41725200, rate: 0.08, rebate: 1452037 },
+    { limit: 58415280, rate: 0.135, rebate: 3746923 },
+    { limit: 75105360, rate: 0.23, rebate: 9296375 },
+    { limit: 100140480, rate: 0.304, rebate: 14854171 },
+    { limit: 258696240, rate: 0.35, rebate: 19460633 },
+    { limit: Infinity, rate: 0.40, rebate: 32395445 },
+  ], []);
+  const calcTax = useCallback((income: number) => {
+    for (const b of TAX_BRACKETS) {
+      if (income <= b.limit) {
+        return Math.round(income * b.rate - b.rebate);
+      }
+    }
+    return 0;
+  }, [TAX_BRACKETS]);
 
   const formatNum = (n: number) => Math.round(n).toLocaleString('es-CL');
   const cleanNum = (s: string) => parseInt(s.replace(/\./g, ''), 10) || 0;
@@ -581,7 +600,9 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
             const avgCap = cap + annualContrib / 2;
             const dividends = Math.round(avgCap * yield_ * months / 12);
             const grossDiv = dividends / 0.73;
-            const refund = Math.round(grossDiv * (0.27 - personalTaxRate / 100));
+            const dividendTax = calcTax(grossDiv);
+            const credit = Math.round(grossDiv * 0.27);
+            const refund = credit - dividendTax;
             const endCap = cap + annualContrib + dividends + refund;
 
             const label = y === 1 && months < 12 ? `${y} (${calYear}, ${months}m)` : `${y} (${calYear})`;
@@ -680,14 +701,22 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </div>
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-                    Tasa Impuesto Personal
-                    <span className="ml-1 text-slate-400 font-normal normal-case">(% Global Complementario)</span>
+                    Aumento anual ($/mes)
                   </label>
-                  <div className="flex items-center gap-2">
-                    <input type="number" min="0" max="40" step="0.5" value={personalTaxRate}
-                      onChange={e => setPersonalTaxRate(Math.max(0, Math.min(40, Number(e.target.value) || 0)))}
-                      className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
-                    <span className="text-xs text-slate-500 font-medium">%</span>
+                  <input type="text" inputMode="numeric" value={increaseStr}
+                    onChange={e => {
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      setIncreaseStr(raw ? formatNum(Number(raw)) : '');
+                    }}
+                    className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                </div>
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
+                    Global Complementario
+                  </label>
+                  <div className="w-full text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded-lg p-2 leading-relaxed">
+                    Tramos progresivos SII (0%–40%) según dividendo bruto de cada año.{' '}
+                    <span className="text-teal-600 font-semibold">Crédito 27% IDPC</span> se resta automáticamente.
                   </div>
                 </div>
               </div>
@@ -709,7 +738,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </table>
               </div>
               <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
-                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. El efecto fiscal = crédito 27% IDPC − impuesto Global Complementario ({personalTaxRate}%). Dividendos y crédito se reinvierten cada año. Meta: $24M/año en dividendos (~$340M de capital).
+                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Impuesto Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, restando el crédito 27% IDPC. Dividendos netos + crédito se reinvierten cada año. Meta: $24M/año en dividendos (~$340M de capital).
               </p>
             </div>
           );
