@@ -614,7 +614,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
             const refund = credit - dividendTax;
             const totalReturn = dividends + refund;
             const metaIncome = sumarTodo
-              ? totalReturn + monthly * months
+              ? refund + monthly * months
               : (incluyeCredito ? totalReturn : dividends) + (aporteCuentaMeta ? monthly * months : 0);
 
             if (!metaAlcanzada && targetMonthly > 0 && metaIncome / months >= targetMonthly) {
