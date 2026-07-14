@@ -30,6 +30,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
   const [yearsStr, setYearsStr] = useState('25');
   const [targetMonthlyStr, setTargetMonthlyStr] = useState('2.000.000');
   const [incluyeCredito, setIncluyeCredito] = useState(false);
+  const [seguirAportando, setSeguirAportando] = useState(true);
   const [planTab, setPlanTab] = useState<'asignacion' | 'proyeccion'>('asignacion');
 
   // Tramos Global Complementario AT 2026 (LIR Art. 52)
@@ -618,12 +619,14 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
 
             let consumed = 0;
             let reinvested = totalReturn;
+            let effectiveContrib = annualContrib;
             if (metaAlcanzada && targetAnnual > 0) {
               const consumible = incluyeCredito ? totalReturn : dividends;
               consumed = Math.min(targetAnnual, consumible);
               reinvested = totalReturn - consumed;
+              if (!seguirAportando) effectiveContrib = 0;
             }
-            const endCap = cap + annualContrib + reinvested;
+            const endCap = cap + effectiveContrib + reinvested;
 
             const label = y === 1 && months < 12 ? `${y} (${calYear}, ${months}m)` : `${y} (${calYear})`;
 
@@ -714,6 +717,11 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                       className="w-3 h-3 rounded border-slate-300 text-teal-600 focus:ring-teal-500/20" />
                     <span className="text-[10px] text-slate-500">Incluir crédito fiscal</span>
                   </label>
+                  <label className="flex items-center gap-1.5 mt-1 cursor-pointer select-none">
+                    <input type="checkbox" checked={seguirAportando} onChange={e => setSeguirAportando(e.target.checked)}
+                      className="w-3 h-3 rounded border-slate-300 text-teal-600 focus:ring-teal-500/20" />
+                    <span className="text-[10px] text-slate-500">Seguir aportando</span>
+                  </label>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
@@ -769,7 +777,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </table>
               </div>
               <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
-                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, menos crédito 27% IDPC. Al alcanzar la meta, el dividendo se consume como "sueldo" (columna Consumido) y solo el excedente se reinvierte. Meta se calcula {incluyeCredito ? 'con' : 'sin'} crédito fiscal. {targetMonthly > 0 ? `Meta: $${formatNum(targetMonthly)}/mes → capital $${formatNum(Math.round(targetMonthly * 12 / weightedYield))}.` : ''}
+                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, menos crédito 27% IDPC. Al alcanzar la meta, el dividendo se consume como "sueldo" (columna Consumido) y solo el excedente se reinvierte. Meta se calcula {incluyeCredito ? 'con' : 'sin'} crédito fiscal. {!seguirAportando ? 'Aportes cesan al llegar a la meta. ' : ''}{targetMonthly > 0 ? `Meta: $${formatNum(targetMonthly)}/mes → capital $${formatNum(Math.round(targetMonthly * 12 / weightedYield))}.` : ''}
               </p>
             </div>
           );
