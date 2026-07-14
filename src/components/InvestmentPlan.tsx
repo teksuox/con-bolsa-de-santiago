@@ -27,6 +27,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
   const [overrideCapitalValue, setOverrideCapitalValue] = useState('');
   const [monthlyStr, setMonthlyStr] = useState('300.000');
   const [increaseStr, setIncreaseStr] = useState('20.000');
+  const [personalTaxRate, setPersonalTaxRate] = useState(0);
   const [planTab, setPlanTab] = useState<'asignacion' | 'proyeccion'>('asignacion');
 
   const formatNum = (n: number) => Math.round(n).toLocaleString('es-CL');
@@ -579,7 +580,8 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
             const annualContrib = monthly * months;
             const avgCap = cap + annualContrib / 2;
             const dividends = Math.round(avgCap * yield_ * months / 12);
-            const refund = Math.round(dividends * 0.27);
+            const grossDiv = dividends / 0.73;
+            const refund = Math.round(grossDiv * (0.27 - personalTaxRate / 100));
             const endCap = cap + annualContrib + dividends + refund;
 
             const label = y === 1 && months < 12 ? `${y} (${calYear}, ${months}m)` : `${y} (${calYear})`;
@@ -591,7 +593,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 <td className="py-1.5 px-2 text-right text-slate-500">{formatCLP(annualContrib, true)}</td>
                 <td className="py-1.5 px-2 text-right">{formatCLP(Math.round(cap))}</td>
                 <td className="py-1.5 px-2 text-right text-emerald-600">{formatCLP(dividends)}</td>
-                <td className="py-1.5 px-2 text-right text-teal-600">{formatCLP(refund)}</td>
+                <td className={`py-1.5 px-2 text-right ${refund >= 0 ? 'text-teal-600' : 'text-rose-600'}`}>{formatCLP(refund)}</td>
                 <td className={`py-1.5 px-2 text-right font-bold ${endCap >= metaCapital ? 'text-teal-700' : 'text-slate-800'}`}>
                   {formatCLP(endCap)}
                   {endCap >= metaCapital && <span className="ml-1 text-[9px] text-emerald-600 font-bold">✓ META</span>}
@@ -608,7 +610,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
             <div className="bg-white rounded-xl border border-slate-200 p-5">
               <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-teal-600" />
-                Proyección 25 años — Dividendo + Devolución 27% reinvertido
+                Proyección 25 años — Dividendo + Efecto fiscal reinvertido
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
@@ -657,7 +659,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aporte mensual</label>
                   <input type="text" inputMode="numeric" value={monthlyStr}
@@ -676,6 +678,18 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                     }}
                     className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
                 </div>
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
+                    Tasa Impuesto Personal
+                    <span className="ml-1 text-slate-400 font-normal normal-case">(% Global Complementario)</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input type="number" min="0" max="40" step="0.5" value={personalTaxRate}
+                      onChange={e => setPersonalTaxRate(Math.max(0, Math.min(40, Number(e.target.value) || 0)))}
+                      className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                    <span className="text-xs text-slate-500 font-medium">%</span>
+                  </div>
+                </div>
               </div>
               <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
                 <table className="w-full text-[11px] font-mono border-collapse">
@@ -686,7 +700,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                       <th className="py-2 px-2 text-right">Aporte/año</th>
                       <th className="py-2 px-2 text-right">Capital inicio</th>
                       <th className="py-2 px-2 text-right">Dividendos</th>
-                      <th className="py-2 px-2 text-right">Dev. 27%</th>
+                      <th className="py-2 px-2 text-right">Efecto fiscal</th>
                       <th className="py-2 px-2 text-right">Capital final</th>
                       <th className="py-2 px-2 text-right">Dividendo/mes</th>
                     </tr>
@@ -695,7 +709,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </table>
               </div>
               <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
-                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Los dividendos y devolución de impuestos se reinvierten cada año. Meta: $24M/año en dividendos (~$340M de capital).
+                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. El efecto fiscal = crédito 27% IDPC − impuesto Global Complementario ({personalTaxRate}%). Dividendos y crédito se reinvierten cada año. Meta: $24M/año en dividendos (~$340M de capital).
               </p>
             </div>
           );
