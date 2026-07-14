@@ -717,11 +717,6 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                       className="w-3 h-3 rounded border-slate-300 text-teal-600 focus:ring-teal-500/20" />
                     <span className="text-[10px] text-slate-500">Incluir crédito fiscal</span>
                   </label>
-                  <label className="flex items-center gap-1.5 mt-1 cursor-pointer select-none">
-                    <input type="checkbox" checked={seguirAportando} onChange={e => setSeguirAportando(e.target.checked)}
-                      className="w-3 h-3 rounded border-slate-300 text-teal-600 focus:ring-teal-500/20" />
-                    <span className="text-[10px] text-slate-500">Seguir aportando</span>
-                  </label>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
@@ -733,6 +728,11 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                       setMonthlyStr(raw ? formatNum(Number(raw)) : '');
                     }}
                     className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                  <label className="flex items-center gap-1.5 mt-1.5 cursor-pointer select-none">
+                    <input type="checkbox" checked={seguirAportando} onChange={e => setSeguirAportando(e.target.checked)}
+                      className="w-3 h-3 rounded border-slate-300 text-teal-600 focus:ring-teal-500/20" />
+                    <span className="text-[10px] text-slate-500">Seguir aportando tras la meta</span>
+                  </label>
                 </div>
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aumento anual ($/mes)</label>
