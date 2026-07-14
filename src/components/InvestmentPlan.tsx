@@ -587,7 +587,6 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
           const yield_ = weightedYield;
           const yearsToProject = parseInt(yearsStr) || 25;
           const targetMonthly = cleanNum(targetMonthlyStr);
-          const metaCapital = targetMonthly > 0 ? Math.round(targetMonthly * 12 / yield_) : Infinity;
 
           const now = new Date();
           const currentMonth = now.getMonth() + 1;
@@ -596,6 +595,8 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
           const rows: any[] = [];
           let cap = projCapital;
           let monthly = projMonthly;
+          const targetAnnual = targetMonthly * 12;
+          let metaAlcanzada = false;
 
           for (let y = 1; y <= yearsToProject; y++) {
             const months = y === 1 ? remainingMonths : 12;
@@ -607,21 +608,36 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
             const dividendTax = calcTax(grossDiv);
             const credit = Math.round(grossDiv * 0.27);
             const refund = credit - dividendTax;
-            const endCap = cap + annualContrib + dividends + refund;
+            const totalReturn = dividends + refund;
+
+            if (!metaAlcanzada && targetMonthly > 0 && dividends / months >= targetMonthly) {
+              metaAlcanzada = true;
+            }
+
+            let consumed = 0;
+            let reinvested = totalReturn;
+            if (metaAlcanzada && targetAnnual > 0) {
+              consumed = Math.min(targetAnnual, totalReturn);
+              reinvested = totalReturn - consumed;
+            }
+            const endCap = cap + annualContrib + reinvested;
 
             const label = y === 1 && months < 12 ? `${y} (${calYear}, ${months}m)` : `${y} (${calYear})`;
 
             rows.push(
-              <tr key={y} className={`hover:bg-slate-50 ${endCap >= metaCapital ? 'bg-teal-50/40 font-semibold' : ''}`}>
+              <tr key={y} className={`hover:bg-slate-50 ${metaAlcanzada ? 'bg-amber-50/40' : ''}`}>
                 <td className="py-1.5 px-2 text-slate-600">{label}</td>
                 <td className="py-1.5 px-2 text-right">{formatCLP(monthly, true)}</td>
                 <td className="py-1.5 px-2 text-right text-slate-500">{formatCLP(annualContrib, true)}</td>
                 <td className="py-1.5 px-2 text-right">{formatCLP(Math.round(cap))}</td>
                 <td className="py-1.5 px-2 text-right text-emerald-600">{formatCLP(dividends)}</td>
                 <td className={`py-1.5 px-2 text-right ${refund >= 0 ? 'text-teal-600' : 'text-rose-600'}`}>{formatCLP(refund)}</td>
-                <td className={`py-1.5 px-2 text-right font-bold ${endCap >= metaCapital ? 'text-teal-700' : 'text-slate-800'}`}>
-                  {formatCLP(endCap)}
-                  {endCap >= metaCapital && <span className="ml-1 text-[9px] text-emerald-600 font-bold">✓ META</span>}
+                <td className={`py-1.5 px-2 text-right ${metaAlcanzada && consumed > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+                  {consumed > 0 ? formatCLP(consumed) : '—'}
+                </td>
+                <td className={`py-1.5 px-2 text-right font-bold ${metaAlcanzada ? 'text-amber-700' : 'text-slate-800'}`}>
+                  {formatCLP(Math.round(endCap))}
+                  {metaAlcanzada && <span className="ml-1 text-[9px] text-amber-600 font-bold">✓ META</span>}
                 </td>
                 <td className="py-1.5 px-2 text-right text-slate-600">{formatCLP(Math.round(dividends / 12))}</td>
               </tr>
@@ -736,6 +752,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                       <th className="py-2 px-2 text-right">Capital inicio</th>
                       <th className="py-2 px-2 text-right">Dividendos</th>
                       <th className="py-2 px-2 text-right">Efecto fiscal</th>
+                      <th className="py-2 px-2 text-right">Consumido</th>
                       <th className="py-2 px-2 text-right">Capital final</th>
                       <th className="py-2 px-2 text-right">Dividendo/mes</th>
                     </tr>
@@ -744,7 +761,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </table>
               </div>
               <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
-                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, menos crédito 27% IDPC. Dividendos netos + efecto fiscal se reinvierten cada año. {targetMonthly > 0 ? `Meta: $${formatNum(targetMonthly)}/mes → capital $${formatNum(Math.round(targetMonthly * 12 / weightedYield))}.` : ''}
+                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, menos crédito 27% IDPC. Al alcanzar la meta, el dividendo se consume como "sueldo" (columna Consumido) y solo el excedente se reinvierte. {targetMonthly > 0 ? `Meta: $${formatNum(targetMonthly)}/mes → capital $${formatNum(Math.round(targetMonthly * 12 / weightedYield))}.` : ''}
               </p>
             </div>
           );
