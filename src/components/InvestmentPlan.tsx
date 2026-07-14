@@ -575,13 +575,14 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
 
           for (let y = 1; y <= 25; y++) {
             const months = y === 1 ? remainingMonths : 12;
+            const calYear = now.getFullYear() + y - 1;
             const annualContrib = monthly * months;
             const avgCap = cap + annualContrib / 2;
             const dividends = Math.round(avgCap * yield_ * months / 12);
             const refund = Math.round(dividends * 0.27);
             const endCap = cap + annualContrib + dividends + refund;
 
-            const label = y === 1 && months < 12 ? `${y} (${months}m)` : String(y);
+            const label = y === 1 && months < 12 ? `${y} (${calYear}, ${months}m)` : `${y} (${calYear})`;
 
             rows.push(
               <tr key={y} className={`hover:bg-slate-50 ${endCap >= metaCapital ? 'bg-teal-50/40 font-semibold' : ''}`}>
