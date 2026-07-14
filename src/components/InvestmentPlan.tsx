@@ -36,7 +36,11 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
     holdings.reduce((sum, h) => sum + h.shares * h.currentPrice, 0),
   [holdings]);
 
-  const projCapital = overrideCapital ? (cleanNum(overrideCapitalValue) || portfolioValue) : portfolioValue;
+  const totalCost = useMemo(() =>
+    holdings.reduce((sum, h) => sum + h.shares * h.buyPrice, 0),
+  [holdings]);
+
+  const projCapital = overrideCapital ? (cleanNum(overrideCapitalValue) || totalCost) : totalCost;
   const projMonthly = cleanNum(monthlyStr);
   const projIncrease = cleanNum(increaseStr);
 
@@ -598,11 +602,10 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 <TrendingUp className="w-4 h-4 text-teal-600" />
                 Proyección 25 años — Dividendo + Devolución 27% reinvertido
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
                     Capital Aportado Total
-                    <span className="ml-1.5 text-teal-500 font-bold">({formatCLP(portfolioValue, true)})</span>
                   </label>
                   <div className="flex items-center gap-2">
                     {overrideCapital ? (
@@ -615,7 +618,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                         className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
                     ) : (
                       <div className="w-full text-sm font-mono font-bold text-slate-900 bg-slate-100 border border-slate-200 rounded-lg p-2">
-                        {formatNum(portfolioValue)}
+                        ${formatNum(totalCost)}
                       </div>
                     )}
                     <button
@@ -625,7 +628,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                           setOverrideCapitalValue('');
                         } else {
                           setOverrideCapital(true);
-                          setOverrideCapitalValue(formatNum(portfolioValue));
+                          setOverrideCapitalValue(formatNum(totalCost));
                         }
                       }}
                       className={`shrink-0 text-[10px] font-medium px-2.5 py-1.5 rounded-lg border transition ${
@@ -633,12 +636,20 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                           ? 'bg-teal-50 text-teal-700 border-teal-300 hover:bg-teal-100'
                           : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
                       }`}
-                      title={overrideCapital ? 'Usar valor real del portafolio' : 'Simular con otro capital'}
+                      title={overrideCapital ? 'Sincronizar con portafolio' : 'Simular con otro capital'}
                     >
                       {overrideCapital ? 'Sinc.' : 'Simular'}
                     </button>
                   </div>
                 </div>
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Valorización de Mercado</label>
+                  <div className="w-full text-sm font-mono font-bold text-emerald-600 bg-slate-100 border border-slate-200 rounded-lg p-2">
+                    ${formatNum(portfolioValue)}
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aporte mensual</label>
                   <input type="text" inputMode="numeric" value={monthlyStr}
