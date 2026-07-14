@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { StockHolding } from '../types';
 import { formatCLP } from '../utils';
 import { supabaseService } from '../lib/supabaseService';
-import { PlusCircle, X, AlertCircle, ArrowRight, ArrowUpDown } from 'lucide-react';
+import { PlusCircle, X, AlertCircle, ArrowRight, ArrowUpDown, TrendingUp } from 'lucide-react';
 
 interface Allocation {
   ticker: string;
@@ -14,7 +14,7 @@ interface Allocation {
 }
 
 interface InvestmentPlanProps {
-  marketStocks: { ticker: string; name: string; price: number }[];
+  marketStocks: { ticker: string; name: string; price: number; dividendYield: number }[];
   holdings: StockHolding[];
   refreshKey?: number;
 }
@@ -23,6 +23,34 @@ export default function InvestmentPlan({ marketStocks, refreshKey }: InvestmentP
   const [budget, setBudget] = useState<number>(1000000);
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [projCapital, setProjCapital] = useState(3258849);
+  const [projMonthly, setProjMonthly] = useState(300000);
+  const [projIncrease, setProjIncrease] = useState(20000);
+  const [planTab, setPlanTab] = useState<'asignacion' | 'proyeccion'>('asignacion');
+
+  // Calculate weighted yield from portfolio mix
+  const portfolioMix: { ticker: string; pct: number }[] = [
+    { ticker: 'ANDINA-B', pct: 20 },
+    { ticker: 'CHILE', pct: 20 },
+    { ticker: 'QUINENCO', pct: 10 },
+    { ticker: 'ENELCHILE', pct: 10 },
+    { ticker: 'PEHUENCHE', pct: 10 },
+    { ticker: 'CFMITNIPSA', pct: 10 },
+    { ticker: 'ZOFRI', pct: 10 },
+    { ticker: 'HABITAT', pct: 10 },
+  ];
+  const weightedYield = useMemo(() => {
+    let totalPct = 0;
+    let weighted = 0;
+    for (const m of portfolioMix) {
+      const stock = marketStocks.find(s => s.ticker === m.ticker);
+      if (stock && stock.dividendYield > 0) {
+        weighted += m.pct * stock.dividendYield;
+        totalPct += m.pct;
+      }
+    }
+    return totalPct > 0 ? weighted / totalPct / 100 : 0.07;
+  }, [marketStocks]);
 
   useEffect(() => {
     // Load from localStorage fallback first
@@ -196,6 +224,28 @@ export default function InvestmentPlan({ marketStocks, refreshKey }: InvestmentP
       <div className="bg-white rounded-xl border border-slate-200 p-6">
         <h2 className="text-lg font-bold text-slate-900 mb-4">Plan de Inversión</h2>
 
+        {/* Sub-tabs */}
+        <div className="flex gap-1 mb-5 bg-slate-100 rounded-lg p-1 w-fit">
+          <button
+            onClick={() => setPlanTab('asignacion')}
+            className={`px-4 py-1.5 text-xs font-medium rounded-md transition ${
+              planTab === 'asignacion' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Asignación
+          </button>
+          <button
+            onClick={() => setPlanTab('proyeccion')}
+            className={`px-4 py-1.5 text-xs font-medium rounded-md transition ${
+              planTab === 'proyeccion' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Proyección
+          </button>
+        </div>
+
+        {planTab === 'asignacion' && (
+        <>
         {/* Budget Input */}
         <div className="mb-6">
           <label className="block text-xs font-medium text-slate-600 mb-1">Presupuesto Total (CLP)</label>
@@ -488,6 +538,95 @@ export default function InvestmentPlan({ marketStocks, refreshKey }: InvestmentP
               )}
             </div>
           </div>
+        )}
+        </>
+        )}
+
+        {planTab === 'proyeccion' && (
+        <>
+        {/* Proyección 25 años */}
+        {(() => {
+          const yield_ = weightedYield;
+          const metaCapital = 340000000;
+
+          const rows: any[] = [];
+          let cap = projCapital;
+          let monthly = projMonthly;
+
+          for (let y = 1; y <= 25; y++) {
+            const annualContrib = monthly * 12;
+            const avgCap = cap + annualContrib / 2;
+            const dividends = Math.round(avgCap * yield_);
+            const refund = Math.round(dividends * 0.27);
+            const endCap = cap + annualContrib + dividends + refund;
+
+            rows.push(
+              <tr key={y} className={`hover:bg-slate-50 ${endCap >= metaCapital ? 'bg-teal-50/40 font-semibold' : ''}`}>
+                <td className="py-1.5 px-2 text-slate-600">{y}</td>
+                <td className="py-1.5 px-2 text-right">{formatCLP(monthly, true)}</td>
+                <td className="py-1.5 px-2 text-right text-slate-500">{formatCLP(annualContrib, true)}</td>
+                <td className="py-1.5 px-2 text-right">{formatCLP(Math.round(cap))}</td>
+                <td className="py-1.5 px-2 text-right text-emerald-600">{formatCLP(dividends)}</td>
+                <td className="py-1.5 px-2 text-right text-teal-600">{formatCLP(refund)}</td>
+                <td className={`py-1.5 px-2 text-right font-bold ${endCap >= metaCapital ? 'text-teal-700' : 'text-slate-800'}`}>
+                  {formatCLP(endCap)}
+                  {endCap >= metaCapital && <span className="ml-1 text-[9px] text-emerald-600 font-bold">✓ META</span>}
+                </td>
+                <td className="py-1.5 px-2 text-right text-slate-600">{formatCLP(Math.round(dividends / 12))}</td>
+              </tr>
+            );
+
+            monthly += projIncrease;
+            cap = endCap;
+          }
+
+          return (
+            <div className="bg-white rounded-xl border border-slate-200 p-5">
+              <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-teal-600" />
+                Proyección 25 años — Dividendo + Devolución 27% reinvertido
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Valor actual cartera</label>
+                  <input type="number" value={projCapital} onChange={e => setProjCapital(Math.max(0, Number(e.target.value)))}
+                    className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                </div>
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aporte mensual</label>
+                  <input type="number" value={projMonthly} onChange={e => setProjMonthly(Math.max(0, Number(e.target.value)))}
+                    className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                </div>
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aumento anual ($/mes)</label>
+                  <input type="number" value={projIncrease} onChange={e => setProjIncrease(Math.max(0, Number(e.target.value)))}
+                    className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                </div>
+              </div>
+              <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                <table className="w-full text-[11px] font-mono border-collapse">
+                  <thead className="sticky top-0 bg-white z-10">
+                    <tr className="border-b border-slate-300 text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                      <th className="py-2 px-2 text-left">Año</th>
+                      <th className="py-2 px-2 text-right">Aporte/mes</th>
+                      <th className="py-2 px-2 text-right">Aporte/año</th>
+                      <th className="py-2 px-2 text-right">Capital inicio</th>
+                      <th className="py-2 px-2 text-right">Dividendos</th>
+                      <th className="py-2 px-2 text-right">Dev. 27%</th>
+                      <th className="py-2 px-2 text-right">Capital final</th>
+                      <th className="py-2 px-2 text-right">Dividendo/mes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">{rows}</tbody>
+                </table>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
+                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. No considera plusvalía. Los dividendos y devolución de impuestos se reinvierten cada año. Meta: $24M/año en dividendos (~$340M de capital).
+              </p>
+            </div>
+          );
+        })()}
+        </>
         )}
       </div>
     </div>

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { MarketStock, StockAlert } from '../types';
 import { formatCLP, formatPercent, normalizeTicker } from '../utils';
 import { Search, Flame, TrendingUp, TrendingDown, DollarSign, PlusCircle, Check, Sparkles, Filter, Trash2, X, Star, Bell, RotateCcw } from 'lucide-react';
@@ -17,6 +17,7 @@ interface MarketWatchProps {
   holdings: { ticker: string }[];
   onSearchAndAddStock?: (stock: MarketStock) => void;
   onDeleteStock?: (ticker: string) => void;
+  onRefreshStock?: (ticker: string) => void;
   deletedStocksCount?: number;
   onRestoreAllStocks?: () => void;
   nextRefreshTime?: number;
@@ -26,12 +27,26 @@ interface MarketWatchProps {
   onResetAlert?: (ticker: string) => void;
 }
 
+function CooldownDisplay({ nextRefreshTime }: { nextRefreshTime?: number }) {
+  const [left, setLeft] = useState(0);
+  useEffect(() => {
+    if (!nextRefreshTime) return;
+    const tick = () => setLeft(Math.max(0, nextRefreshTime - Date.now()));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [nextRefreshTime]);
+  if (!nextRefreshTime) return null;
+  return <span className="text-[11px] text-slate-400 font-mono">⏱ {Math.ceil(left / 1000)}s</span>;
+}
+
 export default function MarketWatch({ 
   marketStocks, 
   onQuickBuy, 
   holdings, 
   onSearchAndAddStock,
   onDeleteStock,
+  onRefreshStock,
   deletedStocksCount = 0,
   onRestoreAllStocks,
   nextRefreshTime,
@@ -40,18 +55,6 @@ export default function MarketWatch({
   onUpdateTargetPrice,
   onResetAlert
 }: MarketWatchProps) {
-  const [cooldownLeft, setCooldownLeft] = useState(0);
-
-  useEffect(() => {
-    if (!nextRefreshTime) return;
-    const tick = () => {
-      setCooldownLeft(Math.max(0, nextRefreshTime - Date.now()));
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [nextRefreshTime]);
-
   const [search, setSearch] = useState('');
   const [selectedSector, setSelectedSector] = useState('ALL');
   const [portfolioFilter, setPortfolioFilter] = useState<'ALL' | 'OWNED' | 'NOT_OWNED'>('ALL');
@@ -106,7 +109,7 @@ export default function MarketWatch({
     }
   };
 
-  const sectors = ['ALL', ...Array.from(new Set(marketStocks.map(s => s.sector)))];
+  const sectors = useMemo(() => ['ALL', ...Array.from(new Set(marketStocks.map(s => s.sector)))], [marketStocks]);
 
   const handleSimulateBuy = (ticker: string) => {
     onQuickBuy(ticker);
@@ -118,19 +121,22 @@ export default function MarketWatch({
 
   const normalizeText = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ñ/g, 'n');
 
-  const filteredStocks = marketStocks.filter(stock => {
-    const q = normalizeText(search);
-    const matchesSearch = normalizeText(stock.ticker).includes(q) || 
-                          normalizeText(stock.name).includes(q);
-    const matchesSector = selectedSector === 'ALL' || stock.sector === selectedSector;
-    
-    const isAlreadyOwned = holdings.some(h => h.ticker === stock.ticker);
-    const matchesPortfolio = portfolioFilter === 'ALL' ||
-                             (portfolioFilter === 'OWNED' && isAlreadyOwned) ||
-                             (portfolioFilter === 'NOT_OWNED' && !isAlreadyOwned);
+  const holdingsSet = useMemo(() => new Set(holdings.map(h => h.ticker)), [holdings]);
+  const alertMap = useMemo(() => new Map(alerts.map(a => [a.ticker, a])), [alerts]);
 
-    return matchesSearch && matchesSector && matchesPortfolio;
-  });
+  const filteredStocks = useMemo(() => {
+    const q = normalizeText(search);
+    return marketStocks.filter(stock => {
+      const matchesSearch = normalizeText(stock.ticker).includes(q) || 
+                            normalizeText(stock.name).includes(q);
+      const matchesSector = selectedSector === 'ALL' || stock.sector === selectedSector;
+      const isAlreadyOwned = holdingsSet.has(stock.ticker);
+      const matchesPortfolio = portfolioFilter === 'ALL' ||
+                               (portfolioFilter === 'OWNED' && isAlreadyOwned) ||
+                               (portfolioFilter === 'NOT_OWNED' && !isAlreadyOwned);
+      return matchesSearch && matchesSector && matchesPortfolio;
+    });
+  }, [marketStocks, search, selectedSector, portfolioFilter, holdingsSet]);
 
   const { sortedData: sortedStocks, sortKey: mwSortKey, toggleSort: mwToggleSort, getSortIcon: mwIcon } = useSortable(filteredStocks, 'ticker', 'sort_marketwatch');
 
@@ -308,7 +314,7 @@ export default function MarketWatch({
             </div>
 
             <span className="text-[11px] text-slate-400 font-mono">
-              ⏱ {Math.ceil(cooldownLeft / 1000)}s
+              <CooldownDisplay nextRefreshTime={nextRefreshTime} />
             </span>
           </div>
         </div>
@@ -354,9 +360,9 @@ export default function MarketWatch({
           </thead>
           <tbody className="divide-y divide-slate-100">
             {sortedStocks.map((stock) => {
-              const isAlreadyOwned = holdings.some(h => h.ticker === stock.ticker);
+              const isAlreadyOwned = holdingsSet.has(stock.ticker);
               const isTickingBuy = justBoughtTicker === stock.ticker;
-              const alert = alerts.find(a => a.ticker === stock.ticker);
+              const alert = alertMap.get(stock.ticker);
               const isStarred = !!alert;
               const isExpanded = expandedTicker === stock.ticker;
 
@@ -381,7 +387,11 @@ export default function MarketWatch({
                     {/* Ticker (Clickable Toggle to expand detail) */}
                     <td className="py-4 px-4 font-mono">
                       <button
-                        onClick={() => setExpandedTicker(isExpanded ? null : stock.ticker)}
+                        onClick={() => {
+                          if (isExpanded) { setExpandedTicker(null); return; }
+                          setExpandedTicker(stock.ticker);
+                          onRefreshStock?.(stock.ticker);
+                        }}
                         className="font-bold text-slate-900 text-sm hover:text-teal-600 hover:underline transition-colors focus:outline-none text-left cursor-pointer flex items-center gap-1 group"
                         title="Haz clic para ver la fluctuación histórica y configurar rangos"
                       >

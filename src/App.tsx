@@ -14,6 +14,7 @@ import TaxRefunds from './components/TaxRefunds';
 import ChartsAndAnalytics from './components/ChartsAndAnalytics';
 import SupabaseSync from './components/SupabaseSync';
 import LoginPage from './components/LoginPage';
+import LandingPage from './components/LandingPage';
 import HistoryPage from './components/HistoryPage';
 import InvestmentPlan from './components/InvestmentPlan';
 import { supabase } from './lib/supabase';
@@ -21,6 +22,7 @@ import { supabaseService } from './lib/supabaseService';
 import { subscribeToChanges } from './lib/supabaseRealtime';
 import { StockHolding, DividendPayment, TaxRefund, MarketStock, StockAlert } from './types';
 import { normalizeTicker } from './utils';
+import { autoSaveMissingDays } from './lib/dailySave';
 
 function dedupeCustomStocks(stocks: MarketStock[]): MarketStock[] {
   const seen = new Set<string>();
@@ -47,8 +49,21 @@ function mergeByUpdatedAt<T extends { id: string; updatedAt?: string }>(local: T
 }
 
 export default function App() {
-  // Auto-session restore from Supabase (handled by SDK via localStorage)
+  // URL path to tab mapping for history mode routing
+  const TAB_PATHS: Record<string, string> = {
+    dashboard: '/dashboard', portfolio: '/portfolio', plan: '/plan',
+    dividends: '/dividends', taxes: '/taxes', history: '/history',
+    market: '/market', backup: '/backup',
+  };
+  const REVERSE_TABS: Record<string, string> = Object.fromEntries(
+    Object.entries(TAB_PATHS).map(([k, v]) => [v, k])
+  );
+
+  // Active tab from URL path or localStorage fallback
   const [activeTab, setActiveTab] = useState<string>(() => {
+    const path = window.location.pathname;
+    const tabFromPath = REVERSE_TABS[path];
+    if (tabFromPath) return tabFromPath;
     const saved = localStorage.getItem('activeTab');
     return saved || 'dashboard';
   });
@@ -594,22 +609,41 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     loadData();
   }, []);
 
+  // Auto-save yesterday's portfolio data to Supabase after holdings load
+  useEffect(() => {
+    if (holdings.length > 0 && !isLoading) {
+      autoSaveMissingDays(holdings);
+    }
+  }, [holdings.length > 0 && !isLoading]);
+
   const [supabaseUser, setSupabaseUser] = useState<any>(null);
-  const [showLoginPage, setShowLoginPage] = useState(false);
+  const [showLoginPage, setShowLoginPage] = useState(() => window.location.pathname === '/login');
+  const [showLanding, setShowLanding] = useState(() => {
+    const path = window.location.pathname;
+    return path === '/' || (path !== '/login' && !REVERSE_TABS[path]);
+  });
   const prevSessionRef = useRef<any>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSupabaseUser(session?.user ?? null);
       prevSessionRef.current = session?.user ?? null;
+      if (session?.user) {
+        setShowLanding(false);
+        setShowLoginPage(false);
+      }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       const prev = prevSessionRef.current;
       const current = session?.user ?? null;
       prevSessionRef.current = current;
       setSupabaseUser(current);
-      if (prev && !current || event === 'SIGNED_OUT') {
+      if (!current || event === 'SIGNED_OUT') {
         setShowLoginPage(true);
+        setShowLanding(false);
+      } else if (current && !prev) {
+        setShowLoginPage(false);
+        setShowLanding(false);
       }
     });
     return () => subscription.unsubscribe();
@@ -1056,6 +1090,22 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     });
   };
 
+  const handleRefreshSingleStock = async (ticker: string) => {
+    try {
+      const res = await fetch(`/api/market-stocks?additional=${encodeURIComponent(ticker)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const fresh = data[0];
+          if (fresh.ticker) {
+            fresh.ticker = normalizeTicker(fresh.ticker);
+            setMarketStocks(prev => prev.map(s => s.ticker === fresh.ticker ? { ...s, ...fresh } : s));
+          }
+        }
+      }
+    } catch { /* silent */ }
+  };
+
   const handleRestoreAllMarketStocks = () => {
     setDeletedStocks([]);
   };
@@ -1112,10 +1162,27 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Persist active tab across refreshes
+  // History mode routing: sync URL with state
   useEffect(() => {
+    const path = TAB_PATHS[activeTab] || '/dashboard';
+    window.history.replaceState(null, '', showLanding ? '/' : showLoginPage ? '/login' : path);
     localStorage.setItem('activeTab', activeTab);
-  }, [activeTab]);
+  }, [activeTab, showLanding, showLoginPage]);
+
+  // Handle browser back/forward buttons
+  useEffect(() => {
+    const onPopState = () => {
+      const path = window.location.pathname;
+      if (path === '/') { setShowLanding(true); setShowLoginPage(false); }
+      else if (path === '/login') { setShowLanding(false); setShowLoginPage(true); }
+      else {
+        const tab = REVERSE_TABS[path];
+        if (tab) { setActiveTab(tab); setShowLanding(false); setShowLoginPage(false); }
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   // Calculations
   const todayStr = new Date().toISOString().split('T')[0];
@@ -1178,8 +1245,17 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     }
   };
 
+  const handleLandingStart = () => {
+    setShowLanding(false);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session?.user) setShowLoginPage(true);
+    });
+  };
+
   return (
-    showLoginPage ? (
+    showLanding ? (
+      <LandingPage onStart={handleLandingStart} />
+    ) : showLoginPage ? (
       <LoginPage onLogin={handleLogin} />
     ) : (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-teal-500 selection:text-slate-900">
@@ -1300,6 +1376,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
                   holdings={holdings}
                   onSearchAndAddStock={handleSearchAndAddStock}
                   onDeleteStock={handleDeleteMarketStock}
+                  onRefreshStock={handleRefreshSingleStock}
                   deletedStocksCount={deletedStocks.length}
                   onRestoreAllStocks={handleRestoreAllMarketStocks}
                   nextRefreshTime={nextRefreshTime}

@@ -296,7 +296,7 @@ async function startServer() {
             } catch { /* merge best-effort */ }
           }
 
-          // 4. Save merged result to Supabase cache
+          // 4. Save merged result to Supabase cache (full history, unfiltered)
           if (supabase && merged.length > 0) {
             try {
               await supabase.from('market_data').upsert(
@@ -306,6 +306,12 @@ async function startServer() {
             } catch { /* cache save best-effort */ }
           }
 
+          // Filter by requested date range before returning
+          if (startDateParam && endDateParam) {
+            const startD = startDateParam;
+            const endD = endDateParam;
+            merged = merged.filter(d => d.date >= startD && d.date <= endD);
+          }
           return { ticker: cleanTicker, history: merged };
         } catch (err: any) {
           console.warn(`[PortfolioHistory] Error fetching ${cleanTicker}: ${err?.message || err}`);

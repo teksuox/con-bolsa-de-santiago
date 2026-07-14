@@ -12,6 +12,7 @@ interface StockHistoryVisualizerProps {
 export default function StockHistoryVisualizer({ stock, onClose }: StockHistoryVisualizerProps) {
   const [realHistory, setRealHistory] = useState<HistoryPoint[] | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [freshPrice, setFreshPrice] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -23,6 +24,7 @@ export default function StockHistoryVisualizer({ stock, onClose }: StockHistoryV
           const item = data.find(d => d.ticker === stock.ticker);
           if (item && item.history.length > 1 && !cancelled) {
             setRealHistory(item.history.map(h => ({ date: h.date, price: h.close })));
+            setFreshPrice(item.history[item.history.length - 1].close);
             setIsLoadingHistory(false);
             return;
           }
@@ -68,20 +70,47 @@ export default function StockHistoryVisualizer({ stock, onClose }: StockHistoryV
 
     const todayPoint = history[history.length - 1];
 
-    const getPeriodStats = (daysAgo: number) => {
-      const idx = Math.max(0, history.length - 1 - daysAgo);
+    const findPastIndex = (targetDate: string): number => {
+      for (let i = history.length - 2; i >= 0; i--) {
+        if (history[i].date <= targetDate) return i;
+      }
+      return 0;
+    };
+
+    const getPeriodStats = (targetDate: string) => {
+      const idx = findPastIndex(targetDate);
       const pastPoint = history[idx];
       const diff = todayPoint.price - pastPoint.price;
       const pct = (diff / pastPoint.price) * 100;
       return { price: pastPoint.price, diff, pct };
     };
 
+    const now = new Date();
+
+    // Day: previous trading day
+    const dayTarget = new Date(now);
+    dayTarget.setDate(dayTarget.getDate() - 1);
+
+    // Week: Monday of current week
+    const weekTarget = new Date(now);
+    const dayOfWeek = weekTarget.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    weekTarget.setDate(weekTarget.getDate() + mondayOffset);
+
+    // Month: 1st of current month
+    const monthTarget = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    // Year: Jan 1 of current year
+    const yearTarget = new Date(now.getFullYear(), 0, 1);
+
+    const toDateStr = (d: Date) => d.toISOString().split('T')[0];
+
     return {
-      oneDay: getPeriodStats(1),
-      oneWeek: getPeriodStats(7),
-      oneMonth: getPeriodStats(30),
-      oneYear: getPeriodStats(365),
-      total: getPeriodStats(history.length - 1),
+      day: getPeriodStats(toDateStr(dayTarget)),
+      week: getPeriodStats(toDateStr(weekTarget)),
+      month: getPeriodStats(toDateStr(monthTarget)),
+      year: getPeriodStats(toDateStr(yearTarget)),
+      total: getPeriodStats(history[0].date),
     };
   }, [history]);
 
@@ -181,7 +210,15 @@ export default function StockHistoryVisualizer({ stock, onClose }: StockHistoryV
             <h4 className="text-sm font-black text-slate-900">{stock.name}</h4>
             <p className="text-[10.5px] text-slate-500 font-mono flex items-center gap-1 mt-0.5">
               <Clock className="w-3 h-3 text-teal-600" />
-              Precio base en simulación histórica IPSA: <span className="font-bold text-slate-700">{formatCLP(stock.price)}</span>
+              Precio{' '}
+              {freshPrice ? (
+                <span className="inline-flex items-center gap-1">
+                  <span className="font-bold text-slate-700">{formatCLP(freshPrice)}</span>
+                  <span className="text-[9px] text-teal-500 font-bold bg-teal-50 px-1.5 py-0.5 rounded-full">Actualizado</span>
+                </span>
+              ) : (
+                <span className="font-bold text-slate-700">{formatCLP(stock.price)}</span>
+              )}
             </p>
           </div>
         </div>
@@ -197,50 +234,50 @@ export default function StockHistoryVisualizer({ stock, onClose }: StockHistoryV
       {/* Preset Fluctuations Row */}
       {periodsData && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
-          {/* 1 dia */}
+          {/* Hoy */}
           <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">1 Día</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Hoy</span>
             <div className="mt-1">
-              <span className="text-xs font-mono text-slate-500 block">Antes: {formatCLP(periodsData.oneDay.price)}</span>
-              <span className={`text-sm font-mono font-black flex items-center gap-0.5 mt-0.5 ${periodsData.oneDay.diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {periodsData.oneDay.diff >= 0 ? <TrendingUp className="w-3.5 h-3.5 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 shrink-0" />}
-                {periodsData.oneDay.diff >= 0 ? '+' : ''}{formatPercent(periodsData.oneDay.pct)}
+              <span className="text-xs font-mono text-slate-500 block">Antes: {formatCLP(periodsData.day.price)}</span>
+              <span className={`text-sm font-mono font-black flex items-center gap-0.5 mt-0.5 ${periodsData.day.diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {periodsData.day.diff >= 0 ? <TrendingUp className="w-3.5 h-3.5 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 shrink-0" />}
+                {periodsData.day.diff >= 0 ? '+' : ''}{formatPercent(periodsData.day.pct)}
               </span>
             </div>
           </div>
 
-          {/* 1 semana */}
+          {/* Esta Semana */}
           <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">1 Semana</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Esta Semana</span>
             <div className="mt-1">
-              <span className="text-xs font-mono text-slate-500 block">Antes: {formatCLP(periodsData.oneWeek.price)}</span>
-              <span className={`text-sm font-mono font-black flex items-center gap-0.5 mt-0.5 ${periodsData.oneWeek.diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {periodsData.oneWeek.diff >= 0 ? <TrendingUp className="w-3.5 h-3.5 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 shrink-0" />}
-                {periodsData.oneWeek.diff >= 0 ? '+' : ''}{formatPercent(periodsData.oneWeek.pct)}
+              <span className="text-xs font-mono text-slate-500 block">Antes: {formatCLP(periodsData.week.price)}</span>
+              <span className={`text-sm font-mono font-black flex items-center gap-0.5 mt-0.5 ${periodsData.week.diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {periodsData.week.diff >= 0 ? <TrendingUp className="w-3.5 h-3.5 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 shrink-0" />}
+                {periodsData.week.diff >= 0 ? '+' : ''}{formatPercent(periodsData.week.pct)}
               </span>
             </div>
           </div>
 
-          {/* 1 mes */}
+          {/* Este Mes */}
           <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">1 Mes</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Este Mes</span>
             <div className="mt-1">
-              <span className="text-xs font-mono text-slate-500 block">Antes: {formatCLP(periodsData.oneMonth.price)}</span>
-              <span className={`text-sm font-mono font-black flex items-center gap-0.5 mt-0.5 ${periodsData.oneMonth.diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {periodsData.oneMonth.diff >= 0 ? <TrendingUp className="w-3.5 h-3.5 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 shrink-0" />}
-                {periodsData.oneMonth.diff >= 0 ? '+' : ''}{formatPercent(periodsData.oneMonth.pct)}
+              <span className="text-xs font-mono text-slate-500 block">Antes: {formatCLP(periodsData.month.price)}</span>
+              <span className={`text-sm font-mono font-black flex items-center gap-0.5 mt-0.5 ${periodsData.month.diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {periodsData.month.diff >= 0 ? <TrendingUp className="w-3.5 h-3.5 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 shrink-0" />}
+                {periodsData.month.diff >= 0 ? '+' : ''}{formatPercent(periodsData.month.pct)}
               </span>
             </div>
           </div>
 
-          {/* 1 año */}
+          {/* Este Año */}
           <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">1 Año</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Este Año</span>
             <div className="mt-1">
-              <span className="text-xs font-mono text-slate-500 block">Antes: {formatCLP(periodsData.oneYear.price)}</span>
-              <span className={`text-sm font-mono font-black flex items-center gap-0.5 mt-0.5 ${periodsData.oneYear.diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {periodsData.oneYear.diff >= 0 ? <TrendingUp className="w-3.5 h-3.5 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 shrink-0" />}
-                {periodsData.oneYear.diff >= 0 ? '+' : ''}{formatPercent(periodsData.oneYear.pct)}
+              <span className="text-xs font-mono text-slate-500 block">Antes: {formatCLP(periodsData.year.price)}</span>
+              <span className={`text-sm font-mono font-black flex items-center gap-0.5 mt-0.5 ${periodsData.year.diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {periodsData.year.diff >= 0 ? <TrendingUp className="w-3.5 h-3.5 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 shrink-0" />}
+                {periodsData.year.diff >= 0 ? '+' : ''}{formatPercent(periodsData.year.pct)}
               </span>
             </div>
           </div>
