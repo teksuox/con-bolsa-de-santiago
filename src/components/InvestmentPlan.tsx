@@ -27,6 +27,8 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
   const [overrideCapitalValue, setOverrideCapitalValue] = useState('');
   const [monthlyStr, setMonthlyStr] = useState('300.000');
   const [increaseStr, setIncreaseStr] = useState('20.000');
+  const [yearsStr, setYearsStr] = useState('25');
+  const [targetMonthlyStr, setTargetMonthlyStr] = useState('2.000.000');
   const [planTab, setPlanTab] = useState<'asignacion' | 'proyeccion'>('asignacion');
 
   // Tramos Global Complementario AT 2026 (LIR Art. 52)
@@ -583,17 +585,19 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
         {/* Proyección 25 años */}
         {(() => {
           const yield_ = weightedYield;
-          const metaCapital = 340000000;
+          const yearsToProject = parseInt(yearsStr) || 25;
+          const targetMonthly = cleanNum(targetMonthlyStr);
+          const metaCapital = targetMonthly > 0 ? Math.round(targetMonthly * 12 / yield_) : Infinity;
 
           const now = new Date();
-          const currentMonth = now.getMonth() + 1; // 1-12
+          const currentMonth = now.getMonth() + 1;
           const remainingMonths = 12 - currentMonth + 1;
 
           const rows: any[] = [];
           let cap = projCapital;
           let monthly = projMonthly;
 
-          for (let y = 1; y <= 25; y++) {
+          for (let y = 1; y <= yearsToProject; y++) {
             const months = y === 1 ? remainingMonths : 12;
             const calYear = now.getFullYear() + y - 1;
             const annualContrib = monthly * months;
@@ -631,14 +635,14 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
             <div className="bg-white rounded-xl border border-slate-200 p-5">
               <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-teal-600" />
-                Proyección 25 años — Dividendo + Efecto fiscal reinvertido
+                Proyección {yearsToProject} años — Dividendo + Efecto fiscal reinvertido
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
                     Capital Aportado Total
                   </label>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
                     {overrideCapital ? (
                       <input type="text" inputMode="numeric" value={overrideCapitalValue}
                         onChange={e => {
@@ -662,12 +666,11 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                           setOverrideCapitalValue(formatNum(totalCost));
                         }
                       }}
-                      className={`shrink-0 text-[10px] font-medium px-2.5 py-1.5 rounded-lg border transition ${
+                      className={`shrink-0 text-[10px] font-medium px-2 py-1.5 rounded-lg border transition ${
                         overrideCapital
                           ? 'bg-teal-50 text-teal-700 border-teal-300 hover:bg-teal-100'
                           : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
                       }`}
-                      title={overrideCapital ? 'Sincronizar con portafolio' : 'Simular con otro capital'}
                     >
                       {overrideCapital ? 'Sinc.' : 'Simular'}
                     </button>
@@ -679,8 +682,17 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                     ${formatNum(portfolioValue)}
                   </div>
                 </div>
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Meta dividendo mensual</label>
+                  <input type="text" inputMode="numeric" value={targetMonthlyStr}
+                    onChange={e => {
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      setTargetMonthlyStr(raw ? formatNum(Number(raw)) : '');
+                    }}
+                    className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aporte mensual</label>
                   <input type="text" inputMode="numeric" value={monthlyStr}
@@ -700,24 +712,18 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                     className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
                 </div>
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-                    Aumento anual ($/mes)
-                  </label>
-                  <input type="text" inputMode="numeric" value={increaseStr}
-                    onChange={e => {
-                      const raw = e.target.value.replace(/[^0-9]/g, '');
-                      setIncreaseStr(raw ? formatNum(Number(raw)) : '');
-                    }}
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Años a proyectar</label>
+                  <input type="number" min="1" max="50" value={yearsStr}
+                    onChange={e => setYearsStr(e.target.value)}
                     className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
                 </div>
-                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-                    Global Complementario
-                  </label>
-                  <div className="w-full text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded-lg p-2 leading-relaxed">
-                    Tramos progresivos SII (0%–40%) según dividendo bruto de cada año.{' '}
-                    <span className="text-teal-600 font-semibold">Crédito 27% IDPC</span> se resta automáticamente.
-                  </div>
+              </div>
+              <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 mb-4">
+                <div className="text-[11px] font-medium text-slate-600 leading-relaxed">
+                  <span className="font-semibold text-teal-600">Global Complementario:</span> Tramos progresivos SII AT 2026 (0%–40%) sobre dividendo bruto, se resta crédito 27% IDPC.{' '}
+                  {targetMonthly > 0 && (
+                    <span>Meta: <strong>${formatNum(targetMonthly)}/mes</strong> (~${formatNum(Math.round(targetMonthly * 12))}/año) → capital necesario <strong>${formatNum(Math.round(targetMonthly * 12 / weightedYield))}</strong> al {weightedYield > 0 ? (weightedYield * 100).toFixed(1) : '?'}%.</span>
+                  )}
                 </div>
               </div>
               <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
@@ -738,7 +744,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </table>
               </div>
               <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
-                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Impuesto Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, restando el crédito 27% IDPC. Dividendos netos + crédito se reinvierten cada año. Meta: $24M/año en dividendos (~$340M de capital).
+                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, menos crédito 27% IDPC. Dividendos netos + efecto fiscal se reinvierten cada año. {targetMonthly > 0 ? `Meta: $${formatNum(targetMonthly)}/mes → capital $${formatNum(Math.round(targetMonthly * 12 / weightedYield))}.` : ''}
               </p>
             </div>
           );
