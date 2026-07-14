@@ -25,15 +25,20 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
   const [loaded, setLoaded] = useState(false);
   const [overrideCapital, setOverrideCapital] = useState(false);
   const [overrideCapitalValue, setOverrideCapitalValue] = useState('');
-  const [projMonthly, setProjMonthly] = useState(300000);
-  const [projIncrease, setProjIncrease] = useState(20000);
+  const [monthlyStr, setMonthlyStr] = useState('300.000');
+  const [increaseStr, setIncreaseStr] = useState('20.000');
   const [planTab, setPlanTab] = useState<'asignacion' | 'proyeccion'>('asignacion');
+
+  const formatNum = (n: number) => Math.round(n).toLocaleString('es-CL');
+  const cleanNum = (s: string) => parseInt(s.replace(/\./g, ''), 10) || 0;
 
   const portfolioValue = useMemo(() =>
     holdings.reduce((sum, h) => sum + h.shares * h.currentPrice, 0),
   [holdings]);
 
-  const projCapital = overrideCapital ? (Number(overrideCapitalValue) || portfolioValue) : portfolioValue;
+  const projCapital = overrideCapital ? (cleanNum(overrideCapitalValue) || portfolioValue) : portfolioValue;
+  const projMonthly = cleanNum(monthlyStr);
+  const projIncrease = cleanNum(increaseStr);
 
   // Calculate weighted yield from portfolio mix
   const portfolioMix: { ticker: string; pct: number }[] = [
@@ -596,16 +601,21 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-                    Valor actual cartera
+                    Capital Aportado Total
                     <span className="ml-1.5 text-teal-500 font-bold">({formatCLP(portfolioValue, true)})</span>
                   </label>
                   <div className="flex items-center gap-2">
                     {overrideCapital ? (
-                      <input type="number" value={overrideCapitalValue} onChange={e => setOverrideCapitalValue(e.target.value)}
+                      <input type="text" inputMode="numeric" value={overrideCapitalValue}
+                        onChange={e => {
+                          const raw = e.target.value.replace(/[^0-9]/g, '');
+                          if (raw === '') { setOverrideCapitalValue(''); return; }
+                          setOverrideCapitalValue(formatNum(Number(raw)));
+                        }}
                         className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
                     ) : (
                       <div className="w-full text-sm font-mono font-bold text-slate-900 bg-slate-100 border border-slate-200 rounded-lg p-2">
-                        {formatCLP(portfolioValue)}
+                        {formatNum(portfolioValue)}
                       </div>
                     )}
                     <button
@@ -615,7 +625,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                           setOverrideCapitalValue('');
                         } else {
                           setOverrideCapital(true);
-                          setOverrideCapitalValue(String(portfolioValue));
+                          setOverrideCapitalValue(formatNum(portfolioValue));
                         }
                       }}
                       className={`shrink-0 text-[10px] font-medium px-2.5 py-1.5 rounded-lg border transition ${
@@ -631,12 +641,20 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </div>
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aporte mensual</label>
-                  <input type="number" value={projMonthly} onChange={e => setProjMonthly(Math.max(0, Number(e.target.value)))}
+                  <input type="text" inputMode="numeric" value={monthlyStr}
+                    onChange={e => {
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      setMonthlyStr(raw ? formatNum(Number(raw)) : '');
+                    }}
                     className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
                 </div>
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aumento anual ($/mes)</label>
-                  <input type="number" value={projIncrease} onChange={e => setProjIncrease(Math.max(0, Number(e.target.value)))}
+                  <input type="text" inputMode="numeric" value={increaseStr}
+                    onChange={e => {
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      setIncreaseStr(raw ? formatNum(Number(raw)) : '');
+                    }}
                     className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
                 </div>
               </div>
