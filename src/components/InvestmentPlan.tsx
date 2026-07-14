@@ -19,14 +19,21 @@ interface InvestmentPlanProps {
   refreshKey?: number;
 }
 
-export default function InvestmentPlan({ marketStocks, refreshKey }: InvestmentPlanProps) {
+export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: InvestmentPlanProps) {
   const [budget, setBudget] = useState<number>(1000000);
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [projCapital, setProjCapital] = useState(3258849);
+  const [overrideCapital, setOverrideCapital] = useState(false);
+  const [overrideCapitalValue, setOverrideCapitalValue] = useState('');
   const [projMonthly, setProjMonthly] = useState(300000);
   const [projIncrease, setProjIncrease] = useState(20000);
   const [planTab, setPlanTab] = useState<'asignacion' | 'proyeccion'>('asignacion');
+
+  const portfolioValue = useMemo(() =>
+    holdings.reduce((sum, h) => sum + h.shares * h.currentPrice, 0),
+  [holdings]);
+
+  const projCapital = overrideCapital ? (Number(overrideCapitalValue) || portfolioValue) : portfolioValue;
 
   // Calculate weighted yield from portfolio mix
   const portfolioMix: { ticker: string; pct: number }[] = [
@@ -588,9 +595,39 @@ export default function InvestmentPlan({ marketStocks, refreshKey }: InvestmentP
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Valor actual cartera</label>
-                  <input type="number" value={projCapital} onChange={e => setProjCapital(Math.max(0, Number(e.target.value)))}
-                    className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
+                    Valor actual cartera
+                    <span className="ml-1.5 text-teal-500 font-bold">({formatCLP(portfolioValue, true)})</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    {overrideCapital ? (
+                      <input type="number" value={overrideCapitalValue} onChange={e => setOverrideCapitalValue(e.target.value)}
+                        className="w-full text-sm font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg p-2" />
+                    ) : (
+                      <div className="w-full text-sm font-mono font-bold text-slate-900 bg-slate-100 border border-slate-200 rounded-lg p-2">
+                        {formatCLP(portfolioValue)}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => {
+                        if (overrideCapital) {
+                          setOverrideCapital(false);
+                          setOverrideCapitalValue('');
+                        } else {
+                          setOverrideCapital(true);
+                          setOverrideCapitalValue(String(portfolioValue));
+                        }
+                      }}
+                      className={`shrink-0 text-[10px] font-medium px-2.5 py-1.5 rounded-lg border transition ${
+                        overrideCapital
+                          ? 'bg-teal-50 text-teal-700 border-teal-300 hover:bg-teal-100'
+                          : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                      }`}
+                      title={overrideCapital ? 'Usar valor real del portafolio' : 'Simular con otro capital'}
+                    >
+                      {overrideCapital ? 'Sinc.' : 'Simular'}
+                    </button>
+                  </div>
                 </div>
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aporte mensual</label>
