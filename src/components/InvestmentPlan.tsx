@@ -565,20 +565,27 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
           const yield_ = weightedYield;
           const metaCapital = 340000000;
 
+          const now = new Date();
+          const currentMonth = now.getMonth() + 1; // 1-12
+          const remainingMonths = 12 - currentMonth + 1;
+
           const rows: any[] = [];
           let cap = projCapital;
           let monthly = projMonthly;
 
           for (let y = 1; y <= 25; y++) {
-            const annualContrib = monthly * 12;
+            const months = y === 1 ? remainingMonths : 12;
+            const annualContrib = monthly * months;
             const avgCap = cap + annualContrib / 2;
-            const dividends = Math.round(avgCap * yield_);
+            const dividends = Math.round(avgCap * yield_ * months / 12);
             const refund = Math.round(dividends * 0.27);
             const endCap = cap + annualContrib + dividends + refund;
 
+            const label = y === 1 && months < 12 ? `${y} (${months}m)` : String(y);
+
             rows.push(
               <tr key={y} className={`hover:bg-slate-50 ${endCap >= metaCapital ? 'bg-teal-50/40 font-semibold' : ''}`}>
-                <td className="py-1.5 px-2 text-slate-600">{y}</td>
+                <td className="py-1.5 px-2 text-slate-600">{label}</td>
                 <td className="py-1.5 px-2 text-right">{formatCLP(monthly, true)}</td>
                 <td className="py-1.5 px-2 text-right text-slate-500">{formatCLP(annualContrib, true)}</td>
                 <td className="py-1.5 px-2 text-right">{formatCLP(Math.round(cap))}</td>
@@ -687,7 +694,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </table>
               </div>
               <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
-                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. No considera plusvalía. Los dividendos y devolución de impuestos se reinvierten cada año. Meta: $24M/año en dividendos (~$340M de capital).
+                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Los dividendos y devolución de impuestos se reinvierten cada año. Meta: $24M/año en dividendos (~$340M de capital).
               </p>
             </div>
           );
