@@ -633,8 +633,8 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
             rows.push(
               <tr key={y} className={`hover:bg-slate-50 ${metaAlcanzada ? 'bg-amber-50/40' : ''}`}>
                 <td className="py-1.5 px-2 text-slate-600">{label}</td>
-                <td className="py-1.5 px-2 text-right">{formatCLP(monthly, true)}</td>
-                <td className="py-1.5 px-2 text-right text-slate-500">{formatCLP(annualContrib, true)}</td>
+                <td className="py-1.5 px-2 text-right">{metaAlcanzada && !seguirAportando ? '—' : formatCLP(monthly, true)}</td>
+                <td className="py-1.5 px-2 text-right text-slate-500">{metaAlcanzada && !seguirAportando ? '—' : formatCLP(annualContrib, true)}</td>
                 <td className="py-1.5 px-2 text-right">{formatCLP(Math.round(cap))}</td>
                 <td className="py-1.5 px-2 text-right text-emerald-600">{formatCLP(dividends)}</td>
                 <td className={`py-1.5 px-2 text-right ${refund >= 0 ? 'text-teal-600' : 'text-rose-600'}`}>{formatCLP(refund)}</td>
