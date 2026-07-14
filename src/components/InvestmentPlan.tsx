@@ -32,7 +32,6 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
   const [incluyeCredito, setIncluyeCredito] = useState(false);
   const [seguirAportando, setSeguirAportando] = useState(true);
   const [aporteCuentaMeta, setAporteCuentaMeta] = useState(false);
-  const [sumarTodo, setSumarTodo] = useState(false);
   const [planTab, setPlanTab] = useState<'asignacion' | 'proyeccion'>('asignacion');
 
   // Tramos Global Complementario AT 2026 (LIR Art. 52)
@@ -613,9 +612,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
             const credit = Math.round(grossDiv * 0.27);
             const refund = credit - dividendTax;
             const totalReturn = dividends + refund;
-            const metaIncome = sumarTodo
-              ? refund + monthly * months
-              : (incluyeCredito ? totalReturn : dividends) + (aporteCuentaMeta ? monthly * months : 0);
+            const metaIncome = (incluyeCredito ? totalReturn : dividends) + (aporteCuentaMeta ? monthly * months : 0);
 
             if (!metaAlcanzada && targetMonthly > 0 && metaIncome / months >= targetMonthly) {
               metaAlcanzada = true;
@@ -742,11 +739,6 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                       className="w-3 h-3 rounded border-slate-300 text-teal-600 focus:ring-teal-500/20" />
                     <span className="text-[10px] text-slate-500">Aporte suma a la meta</span>
                   </label>
-                  <label className="flex items-center gap-1.5 mt-1 cursor-pointer select-none">
-                    <input type="checkbox" checked={sumarTodo} onChange={e => setSumarTodo(e.target.checked)}
-                      className="w-3 h-3 rounded border-slate-300 text-teal-600 focus:ring-teal-500/20" />
-                    <span className="text-[10px] text-slate-500">Sumar aporte + crédito</span>
-                  </label>
                 </div>
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">Aumento anual ($/mes)</label>
@@ -791,7 +783,7 @@ export default function InvestmentPlan({ marketStocks, holdings, refreshKey }: I
                 </table>
               </div>
               <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
-                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, menos crédito 27% IDPC. Al alcanzar la meta, el dividendo se consume como "sueldo" (columna Consumido) y solo el excedente se reinvierte. Meta se calcula {sumarTodo ? 'con aporte + crédito incluidos' : `${incluyeCredito ? 'con' : 'sin'} crédito fiscal${aporteCuentaMeta ? ' y con aporte mensual incluido' : ''}`}. {!seguirAportando ? 'Aportes cesan al llegar a la meta. ' : ''}{targetMonthly > 0 ? `Meta: $${formatNum(targetMonthly)}/mes → capital $${formatNum(Math.round(targetMonthly * 12 / weightedYield))}.` : ''}
+                * Proyección estimada con yield ponderado {(weightedYield * 100).toFixed(1)}% de tu portafolio actual. Año 1 prorrateado ({remainingMonths}m restantes). No considera plusvalía. Global Complementario progresivo (tramos SII AT 2026) sobre dividendo bruto, menos crédito 27% IDPC. Al alcanzar la meta, el dividendo se consume como "sueldo" (columna Consumido) y solo el excedente se reinvierte. Meta se calcula {incluyeCredito ? 'con' : 'sin'} crédito fiscal{aporteCuentaMeta ? ' y con aporte mensual incluido' : ''}. {!seguirAportando ? 'Aportes cesan al llegar a la meta. ' : ''}{targetMonthly > 0 ? `Meta: $${formatNum(targetMonthly)}/mes → capital $${formatNum(Math.round(targetMonthly * 12 / weightedYield))}.` : ''}
               </p>
             </div>
           );
