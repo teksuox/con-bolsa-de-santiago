@@ -361,7 +361,17 @@ export default function ChartsAndAnalytics({
     const monthEntries = chartData.filter(e => e.date >= monthStart && e.date <= getDateStr(now));
     const pfFirst = monthEntries.length > 0 ? monthEntries[0].portfolioValue : 0;
     const pfLast = monthEntries.length > 0 ? monthEntries[monthEntries.length - 1].portfolioValue : 0;
-    const pfPct = pfFirst > 0 ? ((pfLast - pfFirst) / pfFirst) * 100 : null;
+    // Adjust for new capital added during the month (same logic as Historial page)
+    let pfPct: number | null = null;
+    if (monthEntries.length > 0) {
+      const firstDate = monthEntries[0].date;
+      const lastDate = monthEntries[monthEntries.length - 1].date;
+      const newInvestments = listHoldings
+        .filter(h => h.buyDate > firstDate && h.buyDate <= lastDate)
+        .reduce((sum, h) => sum + (h.shares * h.buyPrice), 0);
+      const adjustedStart = pfFirst + newInvestments;
+      pfPct = adjustedStart > 0 ? ((pfLast - adjustedStart) / adjustedStart) * 100 : null;
+    }
     // IPSA from ipsaHistory + localStorage daily tracking
     const ipsaMonth = ipsaHistory.filter(e => e.date >= monthStart);
     // Also load locally tracked daily values for dates not in ipsaHistory
