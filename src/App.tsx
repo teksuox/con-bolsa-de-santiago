@@ -387,6 +387,10 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
   // Capture intraday snapshot whenever market data refreshes
   useEffect(() => {
     if (holdings.length === 0 || !marketDataLoadedRef.current) return;
+    // Chilean market hours: 09:30 - 16:00. Only save snapshots within that window.
+    const nowChile = new Date().toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/Santiago' });
+    const hourMin = parseInt(nowChile.slice(0, 2)) * 60 + parseInt(nowChile.slice(3, 5));
+    if (hourMin < 570 || hourMin >= 960) return; // before 09:30 or after 16:00
     const value = holdings.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0);
     saveIntradaySnapshot({
       time: new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false }),
