@@ -359,20 +359,10 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
   }, [uniqueTickers, filter, customStart, customEnd, holdingsKey, forceRefresh]);
 
   // Total P&L for the selected period:
-  // Use last entry's portfolioValue (Yahoo close prices), not stale current_price from holdings
-  const endValue = entries.length > 0 ? entries[entries.length - 1].portfolioValue : 0;
-  let totalPnL = 0;
-  let totalPnLPct: number | null = null;
-  if (entries.length > 0) {
-    const periodStartValue = entries[0].portfolioValue - entries[0].dailyPnL;
-    const lastEntryDate = entries[entries.length - 1].date;
-    const newInvestments = holdings
-      .filter(h => h.buyDate > entries[0].date && h.buyDate <= lastEntryDate)
-      .reduce((sum, h) => sum + (h.shares * h.buyPrice), 0);
-    const adjustedStart = periodStartValue + newInvestments;
-    totalPnL = endValue - adjustedStart;
-    totalPnLPct = adjustedStart > 0 ? (totalPnL / adjustedStart) * 100 : null;
-  }
+  // Sum daily P&L from Yahoo close prices (each entry's dailyPnL already adjusts for new capital)
+  const totalPnL = entries.reduce((sum, e) => sum + e.dailyPnL, 0);
+  const periodStart = entries.length > 0 ? entries[0].portfolioValue - entries[0].dailyPnL : 0;
+  const totalPnLPct = periodStart > 0 ? (totalPnL / periodStart) * 100 : null;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
