@@ -816,40 +816,6 @@ export default function ChartsAndAnalytics({
                     <span className="block text-[8px] text-slate-400 uppercase tracking-wider">Sectores</span>
           </div>
         </div>
-        {/* Year-by-year returns cards */}
-        {yearlyReturns.length > 0 && (
-          <div className="bg-white p-3 rounded-xl border border-slate-200 col-span-2 md:col-span-6">
-            <span className="text-[10px] text-slate-400 block leading-tight mb-1.5">Rendimiento por Año</span>
-            <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5">
-              {yearlyReturns.map(({ year, ipsaPct, pfPct, hasPf }) => (
-                <div key={year} className="bg-slate-50 rounded-lg p-2 border border-slate-100">
-                  <span className="text-[10px] font-bold text-slate-500 block">{year}</span>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <span className="text-[8px] text-slate-400 font-semibold">I</span>
-                    <span className={`text-[11px] font-extrabold font-mono ${ipsaPct !== null && ipsaPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {ipsaPct !== null ? `${ipsaPct >= 0 ? '+' : ''}${ipsaPct.toFixed(1)}%` : '—'}
-                    </span>
-                  </div>
-                  {hasPf && pfPct !== null && (
-                    <div className="flex items-center gap-1">
-                      <span className="text-[8px] text-slate-400 font-semibold">P</span>
-                      <span className={`text-[11px] font-extrabold font-mono ${pfPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {`${pfPct >= 0 ? '+' : ''}${pfPct.toFixed(1)}%`}
-                      </span>
-                      {ipsaPct !== null && (
-                        pfPct > ipsaPct
-                          ? <span className="text-[8px] text-emerald-500">▲</span>
-                          : pfPct < ipsaPct
-                            ? <span className="text-[8px] text-rose-500">▼</span>
-                            : null
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
             </div>
             <div className="space-y-2">
