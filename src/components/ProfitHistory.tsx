@@ -200,9 +200,14 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
       }
 
       // 2. Cache miss (or holdings changed) — fetch from Yahoo and calculate
+      // Fetch extra days before start to ensure we have a previous close for initialPortfolioValue
+      const padStart = new Date(startStr + 'T12:00:00');
+      padStart.setDate(padStart.getDate() - 7);
+      const paddedStartStr = padStart.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+
       let tickerPrices = new Map<string, Map<string, number>>();
       try {
-        const res = await fetch(`/api/portfolio-history?tickers=${encodeURIComponent(uniqueTickers.join(','))}&startDate=${startStr}&endDate=${endStr}`);
+        const res = await fetch(`/api/portfolio-history?tickers=${encodeURIComponent(uniqueTickers.join(','))}&startDate=${paddedStartStr}&endDate=${endStr}`);
         if (res.ok) {
           const data: { ticker: string; history: { date: string; close: number }[] }[] = await res.json();
           for (const item of data) {
