@@ -344,6 +344,12 @@ export default function ChartsAndAnalytics({
     return ((lastEntry.portfolioValue - startEntry.portfolioValue) / startEntry.portfolioValue) * 100;
   })();
 
+  // Spread vs IPSA ($): portfolio gain/loss minus what IPSA would have returned
+  const portfolioGain = computedCurrentValue - computedContributed;
+  const spreadVsIpsa = ipsaSinceInicio !== null && computedContributed > 0
+    ? portfolioGain - (computedContributed * ipsaSinceInicio / 100)
+    : null;
+
   // Compute IPSA daily change from history
   const ipsaDailyChange = (() => {
     if (ipsaHistory.length < 2) return null;
@@ -663,8 +669,10 @@ export default function ChartsAndAnalytics({
           <span className="text-base font-extrabold font-mono text-indigo-600">{formatCLP(computedCurrentValue)}</span>
         </div>
         <div className="bg-white p-3 rounded-xl border border-slate-200">
-          <span className="text-[10px] text-slate-400 block leading-tight">Yield</span>
-          <span className="text-base font-extrabold font-mono text-emerald-600">{generatedYieldPercent.toFixed(1)}%</span>
+          <span className="text-[10px] text-slate-400 block leading-tight">Spread vs IPSA</span>
+          <span className={`text-base font-extrabold font-mono ${spreadVsIpsa !== null && spreadVsIpsa >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            {spreadVsIpsa !== null ? `${spreadVsIpsa >= 0 ? '+' : ''}${formatCLP(Math.abs(Math.round(spreadVsIpsa)))}` : '—'}
+          </span>
         </div>
 
         {/* Hoy */}
