@@ -661,7 +661,7 @@ export default function ChartsAndAnalytics({
       </div>
 
       {/* Fila de métricas compactas */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
         <div className="bg-white p-3 rounded-xl border border-slate-200 flex flex-col justify-center">
           <span className="text-[10px] text-slate-400 block leading-tight">Capital</span>
           <span className="text-base font-extrabold font-mono text-slate-900">{formatCLP(computedContributed)}</span>
@@ -673,12 +673,6 @@ export default function ChartsAndAnalytics({
         <div className="bg-white p-3 rounded-xl border border-slate-200">
           <span className="text-[10px] text-slate-400 block leading-tight">Yield</span>
           <span className="text-base font-extrabold font-mono text-emerald-600">{generatedYieldPercent.toFixed(1)}%</span>
-        </div>
-        <div className="bg-white p-3 rounded-xl border border-slate-200">
-          <span className="text-[10px] text-slate-400 block leading-tight">Spread vs IPSA</span>
-          <span className={`text-base font-extrabold font-mono ${spreadVsIpsa !== null && spreadVsIpsa >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {spreadVsIpsa !== null ? `${spreadVsIpsa >= 0 ? '+' : ''}${formatCLP(Math.abs(Math.round(spreadVsIpsa)))}` : '—'}
-          </span>
         </div>
 
         {/* Hoy */}
