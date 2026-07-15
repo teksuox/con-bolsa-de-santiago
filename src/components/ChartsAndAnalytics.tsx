@@ -357,6 +357,27 @@ export default function ChartsAndAnalytics({
     return { pfPct, ipsaPct, hasMonthly: allIpsa.length >= 2 };
   })();
 
+  // Compute year-by-year returns for IPSA and portfolio
+  const yearlyReturns = (() => {
+    const years = new Set<number>();
+    for (const e of ipsaHistory) {
+      const y = parseInt(e.date.slice(0, 4), 10);
+      if (!isNaN(y) && y >= 2019 && y <= 2026) years.add(y);
+    }
+    return Array.from(years).sort((a, b) => b - a).map(year => {
+      const entries = ipsaHistory.filter(e => e.date.startsWith(String(year)));
+      const ipsaFirst = entries.length > 0 ? entries[0].portfolioValue : 0;
+      const ipsaLast = entries.length > 0 ? entries[entries.length - 1].portfolioValue : 0;
+      const ipsaPct = ipsaFirst > 0 ? ((ipsaLast - ipsaFirst) / ipsaFirst) * 100 : null;
+      // Portfolio from chartData for this year
+      const pfEntries = chartData.filter(e => e.date.startsWith(String(year)));
+      const pfFirst = pfEntries.length > 0 ? pfEntries[0].portfolioValue : 0;
+      const pfLast = pfEntries.length > 0 ? pfEntries[pfEntries.length - 1].portfolioValue : 0;
+      const pfPct = pfFirst > 0 ? ((pfLast - pfFirst) / pfFirst) * 100 : null;
+      return { year, ipsaPct, pfPct, hasPf: pfEntries.length >= 2 };
+    });
+  })();
+
   // Area chart SVG
   const renderAreaChart = () => {
     if (loadingChart) {
@@ -756,9 +777,43 @@ export default function ChartsAndAnalytics({
                   <div className="text-center">
                     <span className="block text-sm font-extrabold font-mono text-slate-800">{sectorAllocation.length}</span>
                     <span className="block text-[8px] text-slate-400 uppercase tracking-wider">Sectores</span>
+          </div>
+        </div>
+        {/* Year-by-year returns cards */}
+        {yearlyReturns.length > 0 && (
+          <div className="bg-white p-3 rounded-xl border border-slate-200 col-span-2 md:col-span-6">
+            <span className="text-[10px] text-slate-400 block leading-tight mb-1.5">Rendimiento por Año</span>
+            <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5">
+              {yearlyReturns.map(({ year, ipsaPct, pfPct, hasPf }) => (
+                <div key={year} className="bg-slate-50 rounded-lg p-2 border border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-500 block">{year}</span>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <span className="text-[8px] text-slate-400 font-semibold">I</span>
+                    <span className={`text-[11px] font-extrabold font-mono ${ipsaPct !== null && ipsaPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {ipsaPct !== null ? `${ipsaPct >= 0 ? '+' : ''}${ipsaPct.toFixed(1)}%` : '—'}
+                    </span>
                   </div>
+                  {hasPf && pfPct !== null && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-[8px] text-slate-400 font-semibold">P</span>
+                      <span className={`text-[11px] font-extrabold font-mono ${pfPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {`${pfPct >= 0 ? '+' : ''}${pfPct.toFixed(1)}%`}
+                      </span>
+                      {ipsaPct !== null && (
+                        pfPct > ipsaPct
+                          ? <span className="text-[8px] text-emerald-500">▲</span>
+                          : pfPct < ipsaPct
+                            ? <span className="text-[8px] text-rose-500">▼</span>
+                            : null
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
             </div>
             <div className="space-y-2">
               {sectorAllocation.sort((a, b) => b.percentage - a.percentage).map((s, i) => {
