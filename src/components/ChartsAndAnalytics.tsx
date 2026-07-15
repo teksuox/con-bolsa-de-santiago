@@ -668,6 +668,12 @@ export default function ChartsAndAnalytics({
           <span className="text-[10px] text-slate-400 block leading-tight mt-1.5">Mercado</span>
           <span className="text-base font-extrabold font-mono text-indigo-600">{formatCLP(computedCurrentValue)}</span>
         </div>
+
+        {/* Yield */}
+        <div className="bg-white p-3 rounded-xl border border-slate-200">
+          <span className="text-[10px] text-slate-400 block leading-tight">Yield</span>
+          <span className="text-base font-extrabold font-mono text-emerald-600">{generatedYieldPercent.toFixed(1)}%</span>
+        </div>
         <div className="bg-white p-3 rounded-xl border border-slate-200">
           <span className="text-[10px] text-slate-400 block leading-tight">Spread vs IPSA</span>
           <span className={`text-base font-extrabold font-mono ${spreadVsIpsa !== null && spreadVsIpsa >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
