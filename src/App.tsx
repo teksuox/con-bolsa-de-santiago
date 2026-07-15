@@ -204,6 +204,7 @@ export default function App() {
 
   // Prevents alert triggers from firing on fallback/initial data before first real API fetch
   const marketDataLoadedRef = useRef(false);
+  const lastPortfolioValueRef = useRef(0);
 
   // Stocks manually hidden from the market overview
   const [deletedStocks, setDeletedStocks] = useState<string[]>(() => {
@@ -249,6 +250,13 @@ export default function App() {
 
   // Synchronize stock rates and indicator data in the background from Yahoo Finance
   const handleRefreshMarketData = async (silent: boolean = false) => {
+    // After 18:00 CLT, skip refresh if portfolio value hasn't changed (Yahoo done for the day)
+    const nowChile = new Date().toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/Santiago' });
+    const hourMin = parseInt(nowChile.slice(0, 2)) * 60 + parseInt(nowChile.slice(3, 5));
+    if (hourMin >= 1080) {
+      const currentValue = Math.round(holdingsRef.current.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0));
+      if (currentValue === lastPortfolioValueRef.current) return;
+    }
     if (!silent) setIsRefreshing(true);
     try {
       // Collect additional tickers to fetch
@@ -317,6 +325,11 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
                 };
               });
             });
+            const refreshedValue = currentHoldings.reduce((sum, h) => {
+              const quote = normalizedQuotes.find((q: any) => normalizeTicker(q.ticker) === normalizeTicker(h.ticker));
+              return sum + (h.shares * (quote?.price || h.currentPrice));
+            }, 0);
+            lastPortfolioValueRef.current = Math.round(refreshedValue);
             setLastRefreshed(new Date());
             setNextRefreshTime(Date.now() + 180000);
             setRefreshError(null);
