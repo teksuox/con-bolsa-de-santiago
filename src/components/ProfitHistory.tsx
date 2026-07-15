@@ -358,11 +358,11 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
     return () => { cancelled = true; };
   }, [uniqueTickers, filter, customStart, customEnd, holdingsKey, forceRefresh]);
 
-  // Total P&L for the selected period:
-  // Sum daily P&L from Yahoo close prices (each entry's dailyPnL already adjusts for new capital)
+  // Total P&L for the selected period: sum of daily changes (matches grid exactly)
   const totalPnL = entries.reduce((sum, e) => sum + e.dailyPnL, 0);
-  const periodStart = entries.length > 0 ? entries[0].portfolioValue - entries[0].dailyPnL : 0;
-  const totalPnLPct = periodStart > 0 ? (totalPnL / periodStart) * 100 : null;
+  const totalPnLPct = entries.length > 0 && entries[0].portfolioValue > 0
+    ? (totalPnL / (entries[0].portfolioValue - entries[0].dailyPnL)) * 100
+    : null;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
