@@ -23,6 +23,7 @@ import { subscribeToChanges } from './lib/supabaseRealtime';
 import { StockHolding, DividendPayment, TaxRefund, MarketStock, StockAlert } from './types';
 import { normalizeTicker } from './utils';
 import { autoSaveMissingDays } from './lib/dailySave';
+import { saveIntradaySnapshot } from './lib/intradaySnapshot';
 
 function dedupeCustomStocks(stocks: MarketStock[]): MarketStock[] {
   const seen = new Set<string>();
@@ -321,6 +322,19 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
             setRefreshError(null);
             marketDataLoadedRef.current = true;
 
+            // Save intraday snapshot for today's chart
+            const snapshotValue = currentHoldings.reduce((sum, h) => {
+              const quote = normalizedQuotes.find((q: any) => normalizeTicker(q.ticker) === normalizeTicker(h.ticker));
+              const price = quote?.price || h.currentPrice;
+              return sum + (h.shares * price);
+            }, 0);
+            saveIntradaySnapshot({
+              time: new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false }),
+              timestamp: Date.now(),
+              portfolioValue: snapshotValue,
+              ipsaValue: 0,
+            });
+
             // Backfill missing historical data (run once per day max)
             const lastBackfillKey = 'lastHistoryBackfill';
             const lastBackfill = localStorage.getItem(lastBackfillKey);
@@ -369,6 +383,19 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
   useEffect(() => {
     localStorage.setItem('nextRefreshTime', String(nextRefreshTime));
   }, [nextRefreshTime]);
+
+  // Capture intraday snapshot whenever market data refreshes
+  useEffect(() => {
+    if (holdings.length === 0 || !marketDataLoadedRef.current) return;
+    const value = holdings.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0);
+    saveIntradaySnapshot({
+      time: new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false }),
+      timestamp: Date.now(),
+      portfolioValue: Math.round(value),
+      ipsaValue: 0,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastRefreshed]);
 
   // Keep ref updated with latest refresh function
   refreshFnRef.current = handleRefreshMarketData;
@@ -471,7 +498,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
           }
           if (cloud.alerts.length > 0) {
             setAlerts(prev => {
-              const alertMap = new Map(prev.map(a => [a.ticker, a]));
+              const alertMap = new Map<string, StockAlert>(prev.map(a => [a.ticker, a]));
               for (const ca of cloud!.alerts) {
                 const existing = alertMap.get(ca.ticker);
                 if (!existing || (existing.updatedAt || '') < (ca.updatedAt || '')) {
@@ -750,7 +777,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
       onRefundsChanged: (data) => { setRefunds(prev => mergeByUpdatedAt(prev, data)); },
       onAlertsChanged: (data) => {
         setAlerts(prev => {
-          const alertMap = new Map(prev.map(a => [a.ticker, a]));
+          const alertMap = new Map<string, StockAlert>(prev.map(a => [a.ticker, a]));
           for (const ca of data) {
             const existing = alertMap.get(ca.ticker);
             if (!existing || (existing.updatedAt || '') < (ca.updatedAt || '')) {
@@ -1207,6 +1234,13 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     return sum;
   }, 0);
 
+  // Portfolio value at market open (using previousClose as approximate open price)
+  const portfolioOpenValue = holdings.reduce((sum, h) => {
+    const stock = marketStocks.find(s => normalizeTicker(s.ticker) === normalizeTicker(h.ticker));
+    const openPrice = stock?.previousClose && stock.previousClose > 0 ? stock.previousClose : h.currentPrice;
+    return sum + (h.shares * openPrice);
+  }, 0);
+
   const ownedTickers = new Set(holdings.map(h => normalizeTicker(h.ticker)));
   const ownedMarketStocks = marketStocks.filter(s => ownedTickers.has(normalizeTicker(s.ticker)));
 
@@ -1352,6 +1386,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
                   holdingsCount={holdings.length}
                   dailyPnL={dailyPnL}
                   sectorAllocation={sectorAllocation}
+                  portfolioOpenValue={portfolioOpenValue}
                 />
               </div>
 

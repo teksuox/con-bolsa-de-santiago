@@ -225,36 +225,45 @@ async function startServer() {
         try {
           const possibleSymbols: string[] = [];
           const aliasTicker = YAHOO_TICKER_ALIASES[cleanTicker];
-          possibleSymbols.push(`${cleanTicker}.SN`);
-          possibleSymbols.push(cleanTicker);
+          if (cleanTicker.startsWith('^')) {
+            possibleSymbols.push(cleanTicker);
+          } else {
+            possibleSymbols.push(`${cleanTicker}.SN`);
+            possibleSymbols.push(cleanTicker);
+          }
           if (aliasTicker) {
             possibleSymbols.push(`${aliasTicker}.SN`);
             possibleSymbols.push(aliasTicker);
           }
 
           let yahooHistory: { date: string; close: number }[] = [];
+          const yahooRange = startDateParam && endDateParam
+            ? `period1=${Math.floor(new Date(startDateParam + 'T12:00:00').getTime() / 1000)}&period2=${Math.floor(new Date(endDateParam + 'T12:00:00').getTime() / 1000)}`
+            : 'range=1y';
+          const yahooHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json; charset=utf-8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://finance.yahoo.com',
+            'Referer': 'https://finance.yahoo.com/',
+          };
           for (const sym of possibleSymbols) {
-            const yahooRange = startDateParam && endDateParam
-              ? `period1=${Math.floor(new Date(startDateParam + 'T12:00:00').getTime() / 1000)}&period2=${Math.floor(new Date(endDateParam + 'T12:00:00').getTime() / 1000)}`
-              : 'range=1y';
-            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&${yahooRange}`;
-            const response = await fetch(url, {
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
+            for (const host of ['query1', 'query2']) {
+              const url = `https://${host}.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&${yahooRange}&events=div`;
+              const response = await fetch(url, { headers: yahooHeaders });
+              if (!response.ok) continue;
+              const data: any = await response.json();
+              const result = data?.chart?.result?.[0];
+              if (!result) continue;
+              const timestamps: number[] = result.timestamp || [];
+              const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+              for (let i = 0; i < timestamps.length; i++) {
+                if (closes[i] !== null && closes[i] !== undefined) {
+                  const date = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
+                  yahooHistory.push({ date, close: Math.round(closes[i]! * 100) / 100 });
+                }
               }
-            });
-            if (!response.ok) continue;
-            const data: any = await response.json();
-            const result = data?.chart?.result?.[0];
-            if (!result) continue;
-            const timestamps: number[] = result.timestamp || [];
-            const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
-            for (let i = 0; i < timestamps.length; i++) {
-              if (closes[i] !== null && closes[i] !== undefined) {
-                const date = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
-                yahooHistory.push({ date, close: Math.round(closes[i]! * 100) / 100 });
-              }
+              if (yahooHistory.length > 0) break;
             }
             if (yahooHistory.length > 0) break;
           }
@@ -557,6 +566,56 @@ async function startServer() {
     } catch (err: any) {
       console.error(`Error in search-stock dynamic API for ${req.query.ticker}:`, err?.message || err);
       res.status(500).json({ error: err.message || "Error al buscar acción en Bolsa de Santiago" });
+    }
+  });
+
+  // API Route: Intraday prices for today (5-min intervals from Yahoo)
+  app.get('/api/intraday-prices', async (req, res) => {
+    try {
+      const tickersParam = req.query.tickers;
+      if (!tickersParam || typeof tickersParam !== 'string') {
+        return res.status(400).json({ error: "Debe proveer tickers separados por coma" });
+      }
+      const tickers = tickersParam.split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json; charset=utf-8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://finance.yahoo.com',
+        'Referer': 'https://finance.yahoo.com/',
+      };
+      const results = await Promise.all(tickers.map(async (ticker) => {
+        const cleanTicker = ticker.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const symbols: string[] = cleanTicker.startsWith('^') ? [cleanTicker] : [`${cleanTicker}.SN`, cleanTicker];
+        for (const sym of symbols) {
+          for (const host of ['query1', 'query2']) {
+            try {
+              const url = `https://${host}.finance.yahoo.com/v8/finance/chart/${sym}?interval=5m&range=1d`;
+              const response = await fetch(url, { headers });
+              if (!response.ok) continue;
+              const data: any = await response.json();
+              const result = data?.chart?.result?.[0];
+              if (!result) continue;
+              const timestamps: number[] = result.timestamp || [];
+              const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+              const prices: { time: string; close: number; ts: number }[] = [];
+              for (let i = 0; i < timestamps.length; i++) {
+                if (closes[i] !== null && closes[i] !== undefined) {
+                  const d = new Date(timestamps[i] * 1000);
+                  const timeStr = d.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false });
+                  prices.push({ time: timeStr, close: Math.round(closes[i]! * 100) / 100, ts: timestamps[i] * 1000 });
+                }
+              }
+              return { ticker: cleanTicker, prices };
+            } catch { continue; }
+          }
+        }
+        return { ticker: cleanTicker, prices: [] };
+      }));
+      res.json(results);
+    } catch (err: any) {
+      console.error("Error fetching intraday prices:", err?.message || err);
+      res.status(500).json({ error: "Error al obtener precios intradiarios" });
     }
   });
 

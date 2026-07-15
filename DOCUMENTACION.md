@@ -9,7 +9,7 @@ Permite registrar acciones, ver precios en vivo, calcular rentabilidad, proyecta
 
 | Sección | Descripción |
 |---------|-------------|
-| **Resumen** | Dashboard con gráfico de evolución del portafolio (semana/mes/año), rentabilidad, concentración por sector, métricas compactas |
+| **Resumen** | Dashboard con gráfico de evolución del portafolio (semana/mes/año), **gráfico intradiario hoy** (snapshots cada 3 min), **benchmark IPSA** (toggle overlay), rentabilidad, concentración por sector, métricas compactas |
 | **Mi Portafolio** | CRUD de acciones: registrar compras (ticker, cantidad, precio, fecha), editar precio actual, ver rentabilidad por posición, plusvalía/minusvalía, cambio diario, % del portafolio |
 | **Bolsa de Santiago** | Cotizaciones en vivo desde Yahoo Finance. Buscar y agregar cualquier ticker chileno. Alertas de precio con notificación sonora. Filtros por sector/portafolio. "Simular Compra" agrega 1 acción al portafolio. Expandir para ver chart histórico |
 | **Plan de Inversión** | Sub-tab **Asignación**: presupuesto mensual, distribuir % entre acciones. Sub-tab **Proyección**: tabla 25 años con dividendos, impuesto Global Complementario progresivo, meta de sueldo mensual. Parámetros editables: capital, aporte mensual, aumento anual, años, meta. Checkboxes: incluir crédito fiscal, seguir aportando tras meta, aporte suma a la meta |
@@ -27,6 +27,9 @@ Yahoo Finance API ←→ Servidor Express (server.ts) ←→ Cliente React (App.
 ```
 
 - Los precios se actualizan cada 3 minutos automáticamente
+- Cada refresh captura un snapshot intradiario del valor del portafolio (guardado en localStorage)
+- El gráfico intradiario se actualiza cada 30s desde localStorage (sin llamadas a la API)
+- Botón "IPSA" en el gráfico de evolución compara rendimiento del portafolio vs IPSA
 - Los cambios se guardan en localStorage inmediatamente y se sincronizan con Supabase en segundo plano
 - Multi-dispositivo: los cambios hechos en otro dispositivo llegan vía WebSocket Realtime
 
@@ -80,7 +83,8 @@ React 19, TypeScript, Vite 6, Tailwind CSS v4, Express.js, Supabase (PostgreSQL 
 │   │   ├── supabaseService.ts      # Capa CRUD genérica (283 líneas)
 │   │   ├── supabaseRealtime.ts     # Suscripciones WebSocket
 │   │   ├── useSortable.ts          # Hook para tablas ordenables
-│   │   └── dailySave.ts            # Auto-guardado diario a Supabase
+│   │   ├── dailySave.ts            # Auto-guardado diario a Supabase
+│   │   └── intradaySnapshot.ts     # Snapshots intradiarios (cada 3 min en localStorage)
 │   └── utils/
 │       └── stockHistory.ts         # Generación de historial simulado
 ├── public/

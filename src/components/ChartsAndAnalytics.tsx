@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { formatCLP } from '../utils';
-import { TrendingUp, Award, PieChart, AlertTriangle, HelpCircle } from 'lucide-react';
+import { TrendingUp, Award, PieChart, AlertTriangle, HelpCircle, BarChart3 } from 'lucide-react';
 import { StockHolding, SectorAllocation } from '../types';
 import { supabaseService } from '../lib/supabaseService';
 import type { MonthlyPnLEntry } from '../lib/supabase';
+import { loadIntradaySnapshots, IntradayPoint } from '../lib/intradaySnapshot';
 
 interface ChartsAndAnalyticsProps {
   holdings?: StockHolding[];
@@ -15,6 +16,7 @@ interface ChartsAndAnalyticsProps {
   holdingsCount: number;
   dailyPnL: number;
   sectorAllocation?: SectorAllocation[];
+  portfolioOpenValue?: number;
 }
 
 interface ChartEntry {
@@ -45,6 +47,7 @@ export default function ChartsAndAnalytics({
   holdingsCount,
   dailyPnL,
   sectorAllocation = [],
+  portfolioOpenValue = 0,
 }: ChartsAndAnalyticsProps) {
   const [chartRange, setChartRange] = useState<ChartRange>('month');
   const [chartData, setChartData] = useState<ChartEntry[]>([]);
@@ -52,6 +55,137 @@ export default function ChartsAndAnalytics({
   const [hoveredPointIdx, setHoveredPointIdx] = useState<number | null>(null);
   const [debugInfo, setDebugInfo] = useState({ startStr: '', endStr: '', count: 0, firstDate: '' });
   const chartCacheRef = useRef<Record<string, ChartEntry[]>>({});
+
+  const [intradayData, setIntradayData] = useState<IntradayPoint[]>([]);
+  const [hoveredIntradayIdx, setHoveredIntradayIdx] = useState<number | null>(null);
+  const [ipsaHistory, setIpsaHistory] = useState<ChartEntry[]>([]);
+  const [ipsaLoading, setIpsaLoading] = useState(false);
+
+
+
+  // Build intraday data: synthetic 09:30 point + real snapshots + optional Yahoo backfill
+  const holdingsRef = useRef(holdings);
+  holdingsRef.current = holdings;
+
+  useEffect(() => {
+    const snapshots = loadIntradaySnapshots();
+    let data: IntradayPoint[] = [...snapshots];
+
+    if (data.length > 0 && portfolioOpenValue > 0) {
+      const [fh, fm] = data[0].time.split(':').map(Number);
+      if (fh > 9 || (fh === 9 && fm > 30)) {
+        data.unshift({
+          time: '09:30',
+          timestamp: new Date(data[0].timestamp).setHours(9, 30, 0, 0),
+          portfolioValue: Math.round(portfolioOpenValue),
+          ipsaValue: 0,
+        });
+      }
+    }
+
+    setIntradayData(data);
+
+    // Backfill missing hours from Yahoo if there's a gap
+    const active = holdingsRef.current.filter(h => h.shares > 0);
+    if (data.length > 1 && active.length > 0 && portfolioOpenValue > 0) {
+      const gap = data[1].timestamp - data[0].timestamp;
+      if (gap > 600000) {
+        const tickers = [...new Set(active.map(h => h.ticker))].join(',');
+        const shares = active.map(h => h.shares);
+        fetch(`/api/intraday-prices?tickers=${encodeURIComponent(tickers)}`)
+          .then(r => r.ok ? r.json() : null)
+          .then((result: any) => {
+            if (!Array.isArray(result) || result.length === 0) return;
+            const sharesByTicker: Record<string, number> = {};
+            for (const h of holdingsRef.current) sharesByTicker[h.ticker] = (sharesByTicker[h.ticker] || 0) + h.shares;
+            const activeTickers = Object.keys(sharesByTicker);
+            // Build timestamp -> per-ticker price map
+            const rawMap = new Map<number, Record<string, number>>();
+            for (const entry of result) {
+              if (!entry.prices) continue;
+              for (const p of entry.prices) {
+                if (!rawMap.has(p.ts)) rawMap.set(p.ts, {});
+                rawMap.get(p.ts)![entry.ticker] = p.close;
+              }
+            }
+            // Only include timestamps where ALL active tickers have a non-zero price
+            const tsMap = new Map<number, number>();
+            for (const [ts, tickerPrices] of rawMap) {
+              const missingTicker = activeTickers.some(t => !tickerPrices[t] || tickerPrices[t] <= 0);
+              if (missingTicker) continue;
+              let val = 0;
+              for (const [tkr, price] of Object.entries(tickerPrices)) {
+                val += (sharesByTicker[tkr] || 0) * price;
+              }
+              tsMap.set(ts, val);
+            }
+            const sorted = Array.from(tsMap.entries()).sort((a, b) => a[0] - b[0]);
+            if (sorted.length === 0) return;
+            // Normalize: shift all yahoo values so first complete one matches portfolioOpenValue
+            const firstYahooVal = sorted[0][1];
+            const cutoff = snapshots[0]?.timestamp ?? Infinity;
+            const before: IntradayPoint[] = [];
+            for (const [ts, val] of sorted) {
+              if (ts >= cutoff) break;
+              const adjusted = portfolioOpenValue + (val - firstYahooVal);
+              before.push({
+                time: new Date(ts).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false }),
+                timestamp: ts,
+                portfolioValue: Math.round(adjusted),
+                ipsaValue: 0,
+              });
+            }
+            if (before.length > 0) {
+              setIntradayData([...before, ...snapshots]);
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, [portfolioOpenValue]);
+
+  // Poll for new snapshots every 30s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const current = loadIntradaySnapshots();
+      if (current.length === 0) return;
+      setIntradayData(prev => {
+        const existingTs = new Set(prev.map(p => p.timestamp));
+        const newPoints = current.filter(p => !existingTs.has(p.timestamp));
+        if (newPoints.length === 0) return prev;
+        return [...prev, ...newPoints].sort((a, b) => a.timestamp - b.timestamp);
+      });
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch IPSA history once when holdings change
+  useEffect(() => {
+    if (holdings.length === 0) return;
+    setIpsaLoading(true);
+    fetch('/api/portfolio-history?tickers=%5EIPSA&range=1y')
+      .then(res => res.ok ? res.json() : [])
+      .then((data: any) => {
+        if (Array.isArray(data) && data.length > 0) {
+          const ipsaPoints: ChartEntry[] = [];
+          for (const entry of data) {
+            if (!entry.history) continue;
+            for (const day of entry.history) {
+              ipsaPoints.push({
+                date: day.date,
+                portfolioValue: Math.round(day.close),
+                dailyPnL: 0,
+                dailyPnLPct: 0,
+              });
+            }
+          }
+          ipsaPoints.sort((a, b) => a.date.localeCompare(b.date));
+          setIpsaHistory(ipsaPoints);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIpsaLoading(false));
+  }, [holdings]);
 
   useEffect(() => {
     if (holdings.length === 0) return;
@@ -189,6 +323,15 @@ export default function ChartsAndAnalytics({
   const generatedYieldPercent = contributedCapital > 0 
     ? ((totalDividends + totalTaxRefunds) / contributedCapital) * 100 : 0;
 
+  // Compute IPSA daily change from history
+  const ipsaDailyChange = (() => {
+    if (ipsaHistory.length < 2) return null;
+    const last = ipsaHistory[ipsaHistory.length - 1].portfolioValue;
+    const prev = ipsaHistory[ipsaHistory.length - 2].portfolioValue;
+    if (prev <= 0) return null;
+    return ((last - prev) / prev) * 100;
+  })();
+
   // Area chart SVG
   const renderAreaChart = () => {
     if (loadingChart) {
@@ -259,7 +402,7 @@ export default function ChartsAndAnalytics({
             </linearGradient>
           </defs>
           <path d={areaPath} fill="url(#areaGrad)" />
-          <path d={linePath} fill="none" stroke={change >= 0 ? '#14b8a6' : '#ef4444'} strokeWidth="1.5" />
+          <path d={linePath} fill="none" stroke={change >= 0 ? '#14b8a6' : '#ef4444'} strokeWidth="2.5" />
           {hoveredPointIdx !== null && (() => {
             const p = points[hoveredPointIdx];
             if (!p) return null;
@@ -308,6 +451,128 @@ export default function ChartsAndAnalytics({
     );
   };
 
+  // Render intraday chart (today's P&L movement)
+  const renderIntradayChart = () => {
+    if (intradayData.length < 1) return null;
+    const openVal = intradayData[0].portfolioValue;
+    const lastVal = intradayData[intradayData.length - 1].portfolioValue;
+    const pnl = lastVal - openVal;
+    const pnlPct = openVal > 0 ? (pnl / openVal) * 100 : 0;
+
+    if (intradayData.length < 2) {
+    return (
+      <div>
+          <div className="flex items-baseline gap-3 mb-1">
+            <span className={`text-xs font-extrabold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {pnl >= 0 ? '+' : ''}{formatCLP(pnl)}
+            </span>
+            <span className="text-[9px] text-slate-400">esperando datos...</span>
+          </div>
+        </div>
+      );
+    }
+
+    // Convert to P&L relative to open
+    const pnlValues = intradayData.map(d => d.portfolioValue - openVal);
+    const maxPnl = Math.max(...pnlValues, 1);
+    const minPnl = Math.min(...pnlValues, -1);
+    const range = Math.max(maxPnl - minPnl, 1);
+
+    const vbW = 700;
+    const vbH = 100;
+    const padT = 8;
+    const padB = 16;
+    const chartW = vbW;
+    const chartH = vbH - padT - padB;
+    const stepX = chartW / (intradayData.length - 1);
+
+    // Find y coordinate for zero line
+    const zeroY = padT + chartH - ((0 - minPnl) / range) * chartH;
+
+    const points = pnlValues.map((v, i) => ({
+      x: i * stepX,
+      y: padT + chartH - ((v - minPnl) / range) * chartH,
+    }));
+    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const areaPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ') +
+      ` L${points[points.length - 1].x},${padT + chartH} L${points[0].x},${padT + chartH} Z`;
+
+    const labelStep = Math.max(1, Math.floor(intradayData.length / 6));
+
+    return (
+      <div>
+        <div className="flex items-baseline gap-3 mb-1">
+          <span className={`text-xs font-extrabold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            {pnl >= 0 ? '+' : ''}{formatCLP(pnl)}
+          </span>
+          <span className={`text-[10px] font-bold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+          </span>
+          <span className="text-[9px] text-slate-400">hoy, {intradayData.length}pts</span>
+        </div>
+        <svg viewBox={`0 0 ${vbW} ${vbH}`} style={{ width: '100%', aspectRatio: `${vbW}/${vbH}`, display: 'block' }}
+          onMouseMove={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const xPos = e.clientX - rect.left;
+            const frac = xPos / rect.width;
+            let idx = Math.round(frac * (intradayData.length - 1));
+            idx = Math.max(0, Math.min(intradayData.length - 1, idx));
+            setHoveredIntradayIdx(idx);
+          }}
+          onMouseLeave={() => setHoveredIntradayIdx(null)}>
+          <defs>
+            <linearGradient id="intradayAreaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={pnl >= 0 ? '#14b8a6' : '#ef4444'} stopOpacity="0.25" />
+              <stop offset="100%" stopColor={pnl >= 0 ? '#14b8a6' : '#ef4444'} stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {/* Zero line */}
+          <line x1={0} y1={zeroY} x2={vbW} y2={zeroY} stroke="#cbd5e1" strokeWidth="0.5" strokeDasharray="3 3" />
+          <path d={areaPath} fill="url(#intradayAreaGrad)" />
+          <path d={linePath} fill="none" stroke={pnl >= 0 ? '#14b8a6' : '#ef4444'} strokeWidth="2.5" />
+          {(() => {
+            return points.map((p, idx) => {
+              if (idx % labelStep !== 0 && idx !== points.length - 1) return null;
+              return (
+                <g key={idx}>
+                  <circle cx={p.x} cy={p.y} r="2" fill={pnl >= 0 ? '#14b8a6' : '#ef4444'} />
+                </g>
+              );
+            });
+          })()}
+          {hoveredIntradayIdx !== null && points[hoveredIntradayIdx] && (
+            <g>
+              <line x1={points[hoveredIntradayIdx].x} y1={padT} x2={points[hoveredIntradayIdx].x} y2={padT + chartH} stroke="#94a3b8" strokeWidth="1" strokeDasharray="2 2" />
+              <circle cx={points[hoveredIntradayIdx].x} cy={points[hoveredIntradayIdx].y} r="5" fill="#0f172a" stroke={pnl >= 0 ? '#2dd4bf' : '#fb7185'} strokeWidth="2" />
+            </g>
+          )}
+        </svg>
+        <div className="h-5 mt-0.5 flex items-center justify-center">
+          {hoveredIntradayIdx !== null && intradayData[hoveredIntradayIdx] ? (
+            (() => {
+              const d = intradayData[hoveredIntradayIdx];
+              const pointPnl = d.portfolioValue - openVal;
+              const pointPnlPct = openVal > 0 ? (pointPnl / openVal) * 100 : 0;
+              return (
+                <div className="bg-slate-900 text-teal-300 text-[10.5px] font-mono font-bold px-3 py-0.5 rounded-full shadow-md flex items-center gap-1.5">
+                  <span className="text-white">{d.time}:</span>
+                  <span className={pointPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                    {pointPnl >= 0 ? '+' : ''}{formatCLP(pointPnl)} ({pointPnlPct >= 0 ? '+' : ''}{pointPnlPct.toFixed(2)}%)
+                  </span>
+                </div>
+              );
+            })()
+          ) : (
+            <span className="text-[8px] text-slate-400 italic flex items-center gap-1">
+              <HelpCircle className="w-3 h-3 text-slate-300" />
+              Mueve el mouse para ver la plusvalía
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-3">
       {/* Header compacto */}
@@ -317,7 +582,7 @@ export default function ChartsAndAnalytics({
       </div>
 
       {/* Fila de métricas compactas */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
         <div className="bg-white p-3 rounded-xl border border-slate-200">
           <span className="text-[10px] text-slate-400 block leading-tight">Capital</span>
           <span className="text-base font-extrabold font-mono text-slate-900">{formatCLP(computedContributed)}</span>
@@ -340,7 +605,24 @@ export default function ChartsAndAnalytics({
           <span className="text-[10px] text-slate-400 block leading-tight">Posiciones</span>
           <span className="text-base font-extrabold font-mono text-slate-900">{listHoldings.length}</span>
         </div>
+        <div className="bg-white p-3 rounded-xl border border-slate-200">
+          <span className="text-[10px] text-slate-400 block leading-tight">IPSA</span>
+          <span className={`text-base font-extrabold font-mono ${ipsaDailyChange !== null && ipsaDailyChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            {ipsaDailyChange !== null ? `${ipsaDailyChange >= 0 ? '+' : ''}${ipsaDailyChange.toFixed(2)}%` : ipsaLoading ? '...' : '—'}
+          </span>
+        </div>
       </div>
+
+      {/* Gráfico Intradiario (Hoy) */}
+      {renderIntradayChart() !== null && (
+        <div className="bg-white p-4 rounded-xl border border-slate-200">
+          <div className="flex items-center space-x-1.5 mb-2">
+            <BarChart3 className="w-3.5 h-3.5 text-amber-500" />
+            <span className="font-bold text-slate-800 text-xs">Hoy (Intradiario)</span>
+          </div>
+          {renderIntradayChart()}
+        </div>
+      )}
 
       {/* Gráfico de área + Minusvalía/Plusvalía */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
