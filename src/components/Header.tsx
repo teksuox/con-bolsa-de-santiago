@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TrendingUp, DollarSign, Wallet, Calendar, FileCheck, Landmark, Briefcase, Cloud } from 'lucide-react';
 import { isMarketOpen } from '../utils';
 
@@ -21,6 +21,15 @@ export default function Header({
   nextRefreshTime
 }: HeaderProps) {
   const [cooldownLeft, setCooldownLeft] = useState(0);
+  const navRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!navRef.current) return;
+    const activeBtn = navRef.current.querySelector(`[data-tab="${activeTab}"]`) as HTMLElement | null;
+    if (activeBtn) {
+      activeBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (!nextRefreshTime) return;
@@ -116,7 +125,7 @@ export default function Header({
 
       {/* Navigation Subbar (Tabs) with Integrated Portfolio Sum badge */}
       <div className="bg-slate-900 border-t border-slate-800/20 px-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between py-1.5 overflow-x-auto whitespace-nowrap scrollbar-none gap-4">
+        <div ref={navRef} className="max-w-7xl mx-auto flex items-center justify-between py-1.5 overflow-x-auto whitespace-nowrap scrollbar-none gap-4">
           
           {/* Tabs Container */}
           <div className="flex items-center space-x-1">
@@ -136,6 +145,7 @@ export default function Header({
               return (
                 <button
                   key={item.id}
+                  data-tab={item.id}
                   onClick={() => setActiveTab(item.id)}
                   className={`flex items-center space-x-1.5 px-3 py-2.5 text-xs font-semibold rounded-lg transition-all duration-200 whitespace-nowrap shrink-0 group cursor-pointer ${
                     isActive

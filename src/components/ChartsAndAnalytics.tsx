@@ -502,13 +502,13 @@ export default function ChartsAndAnalytics({
     return (
       <div>
         <div className="flex items-baseline gap-3 mb-1">
-          <span className={`text-xs font-extrabold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+          <span className={`text-base font-extrabold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
             {pnl >= 0 ? '+' : ''}{formatCLP(pnl)}
           </span>
-          <span className={`text-[10px] font-bold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+          <span className={`text-sm font-bold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
             ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
           </span>
-          <span className="text-[9px] text-slate-400">hoy, {intradayData.length}pts</span>
+          <span className="text-xs text-slate-400">hoy, {intradayData.length}pts</span>
         </div>
         <svg viewBox={`0 0 ${vbW} ${vbH}`} style={{ width: '100%', aspectRatio: `${vbW}/${vbH}`, display: 'block' }}
           onMouseMove={(e) => {
@@ -595,12 +595,7 @@ export default function ChartsAndAnalytics({
           <span className="text-[10px] text-slate-400 block leading-tight">Yield</span>
           <span className="text-base font-extrabold font-mono text-emerald-600">{generatedYieldPercent.toFixed(1)}%</span>
         </div>
-        <div className="bg-white p-3 rounded-xl border border-slate-200">
-          <span className="text-[10px] text-slate-400 block leading-tight">Hoy</span>
-          <span className={`text-base font-extrabold font-mono ${dailyPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {dailyPnL >= 0 ? '+' : ''}{formatCLP(dailyPnL)}
-          </span>
-        </div>
+
         <div className="bg-white p-3 rounded-xl border border-slate-200">
           <span className="text-[10px] text-slate-400 block leading-tight">Posiciones</span>
           <span className="text-base font-extrabold font-mono text-slate-900">{listHoldings.length}</span>

@@ -296,47 +296,47 @@ export default function MyPortfolio({
   return (
     <div className="space-y-6">
       {/* Overview Metric Row */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-medium uppercase tracking-wider block">Capital Aportado Total</span>
-          <span className="text-2xl font-bold font-mono text-slate-900 block mt-1">{formatCLP(totalContributed)}</span>
-          <span className="text-xs text-slate-400 mt-2 block">Suma del costo total de adquisiciones</span>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white p-3 md:p-5 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] md:text-xs text-slate-500 font-medium uppercase tracking-wider block">Capital Aportado</span>
+          <span className="text-base md:text-2xl font-bold font-mono text-slate-900 block mt-1">{formatCLP(totalContributed)}</span>
+          <span className="text-[10px] md:text-xs text-slate-400 mt-2 block">Costo total de adquisiciones</span>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-medium uppercase tracking-wider block">Valorización de Mercado</span>
-          <span className="text-2xl font-bold font-mono text-slate-900 block mt-1">{formatCLP(totalCurrent)}</span>
-          <span className="text-xs text-slate-400 mt-2 block flex items-center gap-1">
-            Revalorizado con precios actuales de bolsa
+        <div className="bg-white p-3 md:p-5 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] md:text-xs text-slate-500 font-medium uppercase tracking-wider block">Valorización de Mercado</span>
+          <span className="text-base md:text-2xl font-bold font-mono text-slate-900 block mt-1">{formatCLP(totalCurrent)}</span>
+          <span className="text-[10px] md:text-xs text-slate-400 mt-2 block flex items-center gap-1">
+            Valor actual de mercado
           </span>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-medium uppercase tracking-wider block">Fluctuación de Capital (Plusvalía)</span>
+        <div className="bg-white p-3 md:p-5 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] md:text-xs text-slate-500 font-medium uppercase tracking-wider block">Fluctuación de Capital (Plusvalía)</span>
           <div className="flex items-baseline space-x-2 mt-1">
-            <span className={`text-2xl font-bold font-mono ${totalGainLoss >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            <span className={`text-base md:text-2xl font-bold font-mono ${totalGainLoss >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {totalGainLoss >= 0 ? '+' : ''}{formatCLP(totalGainLoss)}
             </span>
-            <span className={`text-xs font-semibold font-mono ${totalGainLoss >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} px-2 py-0.5 rounded-full flex items-center`}>
-              {totalGainLoss >= 0 ? <ArrowUpRight className="w-3.5 h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3.5 h-3.5 mr-0.5" />}
+            <span className={`text-[10px] md:text-xs font-semibold font-mono ${totalGainLoss >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} px-2 py-0.5 rounded-full flex items-center`}>
+              {totalGainLoss >= 0 ? <ArrowUpRight className="w-3 h-3 md:w-3.5 md:h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3 h-3 md:w-3.5 md:h-3.5 mr-0.5" />}
               {totalGainLossPercent.toFixed(2)}%
             </span>
           </div>
-          <span className="text-xs text-slate-400 mt-2 block">Diferencia entre valor actual y compra</span>
+          <span className="text-[10px] md:text-xs text-slate-400 mt-2 block">Diferencia entre valor actual y compra</span>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-medium uppercase tracking-wider block">Ganancia / Pérdida del Día</span>
+        <div className="bg-white p-3 md:p-5 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] md:text-xs text-slate-500 font-medium uppercase tracking-wider block">Ganancia / Pérdida del Día</span>
           <div className="flex items-baseline space-x-2 mt-1">
-            <span className={`text-2xl font-bold font-mono ${dailyPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            <span className={`text-base md:text-2xl font-bold font-mono ${dailyPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {dailyPnL >= 0 ? '+' : ''}{formatCLP(dailyPnL)}
             </span>
-            <span className={`text-xs font-semibold font-mono ${dailyPnL >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} px-2 py-0.5 rounded-full flex items-center`}>
+            <span className={`text-[10px] md:text-xs font-semibold font-mono ${dailyPnL >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} px-2 py-0.5 rounded-full flex items-center`}>
               {dailyPnL >= 0 ? '+' : ''}
               {totalCurrent > 0 ? ((dailyPnL / (totalCurrent - dailyPnL)) * 100).toFixed(2) : '0.00'}%
             </span>
           </div>
-          <span className="text-xs text-slate-400 mt-2 block">Hoy</span>
+          <span className="text-[10px] md:text-xs text-slate-400 mt-2 block">Hoy</span>
         </div>
       </div>
 

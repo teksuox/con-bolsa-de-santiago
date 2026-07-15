@@ -1292,7 +1292,38 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     ) : showLoginPage ? (
       <LoginPage onLogin={handleLogin} />
     ) : (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-teal-500 selection:text-slate-900">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-teal-500 selection:text-slate-900"
+      onTouchStart={(e) => {
+        const el = e.currentTarget;
+        el.dataset.touchX = e.touches[0].clientX.toString();
+        el.dataset.touchY = e.touches[0].clientY.toString();
+        // Ignore swipe if touch started inside a horizontally scrollable element
+        let node = e.target as HTMLElement | null;
+        let inScrollable = false;
+        while (node && node !== el) {
+          const style = getComputedStyle(node);
+          if (style.overflowX === 'auto' || style.overflowX === 'scroll') {
+            if (node.scrollWidth > node.clientWidth) { inScrollable = true; break; }
+          }
+          node = node.parentElement;
+        }
+        el.dataset.ignoreSwipe = inScrollable ? '1' : '0';
+      }}
+      onTouchEnd={(e) => {
+        const el = e.currentTarget;
+        if (el.dataset.ignoreSwipe === '1') return;
+        const startX = parseFloat(el.dataset.touchX || '0');
+        const startY = parseFloat(el.dataset.touchY || '0');
+        const endX = e.changedTouches[0].clientX;
+        const endY = e.changedTouches[0].clientY;
+        const dX = endX - startX;
+        const dY = endY - startY;
+        if (Math.abs(dX) < 50 || Math.abs(dX) < Math.abs(dY) * 2) return;
+        const tabs = ['dashboard', 'portfolio', 'plan', 'dividends', 'taxes', 'history', 'market', 'backup'];
+        const idx = tabs.indexOf(activeTab);
+        if (dX < 0 && idx < tabs.length - 1) handleTabChange(tabs[idx + 1]);
+        if (dX > 0 && idx > 0) handleTabChange(tabs[idx - 1]);
+      }}>
       <Header
         activeTab={activeTab}
         setActiveTab={handleTabChange}
