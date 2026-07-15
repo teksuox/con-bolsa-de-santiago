@@ -919,6 +919,34 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 
+  // API: IPSA historical data from findic.cl (free, no API key needed)
+  app.get('/api/ipsa-history', async (_req, res) => {
+    try {
+      const cacheKey = 'ipsa_history_findic';
+      if (supabase) {
+        const { data: cached } = await supabase.from('market_data').select('data, updated_at').eq('key', cacheKey).single().catch(() => ({ data: null }));
+        if (cached?.data && Array.isArray(cached.data)) {
+          return res.json({ history: cached.data, fromCache: true });
+        }
+      }
+      const resp = await fetch('https://findic.cl/api/ipsa/2026', {
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+      if (!resp.ok) return res.status(502).json({ error: 'findic.cl unavailable' });
+      const data: any = await resp.json();
+      const serie: { fecha: string; valor: number }[] = data?.serie || [];
+      const history = serie.map((d: any) => ({ date: d.fecha, close: Math.round(d.valor * 100) / 100 }));
+      history.sort((a: any, b: any) => a.date.localeCompare(b.date));
+      if (supabase && history.length > 0) {
+        supabase.from('market_data').upsert({ key: cacheKey, data: history, updated_at: new Date().toISOString() }, { onConflict: 'key' }).catch(() => {});
+      }
+      res.json({ history });
+    } catch (err: any) {
+      console.error('Error fetching IPSA history:', err?.message || err);
+      res.status(500).json({ error: 'Error al obtener historial IPSA' });
+    }
+  });
+
   // Graceful shutdown for Docker
   const shutdown = () => {
     console.log('Shutting down gracefully...');

@@ -159,39 +159,32 @@ export default function ChartsAndAnalytics({
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch IPSA history once when holdings change
+  // Fetch IPSA history from findic.cl via server
   useEffect(() => {
     if (holdings.length === 0) return;
     setIpsaLoading(true);
-    fetch('/api/portfolio-history?tickers=%5EIPSA&range=1y')
-      .then(res => res.ok ? res.json() : [])
+    fetch('/api/ipsa-history')
+      .then(res => res.ok ? res.json() : { history: [] })
       .then((data: any) => {
-        if (Array.isArray(data) && data.length > 0) {
-          const ipsaPoints: ChartEntry[] = [];
-          for (const entry of data) {
-            if (!entry.history) continue;
-            for (const day of entry.history) {
-              ipsaPoints.push({
-                date: day.date,
-                portfolioValue: Math.round(day.close),
-                dailyPnL: 0,
-                dailyPnLPct: 0,
-              });
-            }
-          }
-          ipsaPoints.sort((a, b) => a.date.localeCompare(b.date));
+        const history = data?.history || [];
+        if (history.length > 0) {
+          const ipsaPoints: ChartEntry[] = history.map((d: any) => ({
+            date: d.date,
+            portfolioValue: Math.round(d.close),
+            dailyPnL: 0,
+            dailyPnLPct: 0,
+          }));
+          ipsaPoints.sort((a: any, b: any) => a.date.localeCompare(b.date));
           setIpsaHistory(ipsaPoints);
           // Save latest IPSA value to localStorage for daily tracking
-          if (ipsaPoints.length > 0) {
-            const latest = ipsaPoints[ipsaPoints.length - 1];
-            try {
-              const stored: { date: string; value: number }[] = JSON.parse(localStorage.getItem('ipsaDailyHistory') || '[]');
-              const existing = stored.findIndex(e => e.date === latest.date);
-              if (existing >= 0) stored[existing] = { date: latest.date, value: latest.portfolioValue };
-              else stored.push({ date: latest.date, value: latest.portfolioValue });
-              localStorage.setItem('ipsaDailyHistory', JSON.stringify(stored));
-            } catch {}
-          }
+          const latest = ipsaPoints[ipsaPoints.length - 1];
+          try {
+            const stored: { date: string; value: number }[] = JSON.parse(localStorage.getItem('ipsaDailyHistory') || '[]');
+            const existing = stored.findIndex(e => e.date === latest.date);
+            if (existing >= 0) stored[existing] = { date: latest.date, value: latest.portfolioValue };
+            else stored.push({ date: latest.date, value: latest.portfolioValue });
+            localStorage.setItem('ipsaDailyHistory', JSON.stringify(stored));
+          } catch {}
         }
       })
       .catch(() => {})
