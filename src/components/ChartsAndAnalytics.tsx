@@ -327,6 +327,23 @@ export default function ChartsAndAnalytics({
   const generatedYieldPercent = contributedCapital > 0 
     ? ((totalDividends + totalTaxRefunds) / contributedCapital) * 100 : 0;
 
+  // First purchase date for "Desde Inicio" comparison
+  const earliestBuyDate = listHoldings.length > 0
+    ? listHoldings.map(h => h.buyDate).filter(Boolean).sort()[0] || null
+    : null;
+
+  // Total portfolio return since inception
+  const totalReturnPct = computedContributed > 0 ? ((computedCurrentValue - computedContributed) / computedContributed) * 100 : null;
+
+  // IPSA return since first purchase
+  const ipsaSinceInicio = (() => {
+    if (!earliestBuyDate || ipsaHistory.length < 2) return null;
+    const startEntry = ipsaHistory.find(e => e.date >= earliestBuyDate);
+    const lastEntry = ipsaHistory[ipsaHistory.length - 1];
+    if (!startEntry || !lastEntry || startEntry.portfolioValue <= 0) return null;
+    return ((lastEntry.portfolioValue - startEntry.portfolioValue) / startEntry.portfolioValue) * 100;
+  })();
+
   // Compute IPSA daily change from history
   const ipsaDailyChange = (() => {
     if (ipsaHistory.length < 2) return null;
@@ -629,12 +646,10 @@ export default function ChartsAndAnalytics({
 
       {/* Fila de métricas compactas */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-        <div className="bg-white p-3 rounded-xl border border-slate-200">
+        <div className="bg-white p-3 rounded-xl border border-slate-200 flex flex-col justify-center">
           <span className="text-[10px] text-slate-400 block leading-tight">Capital</span>
           <span className="text-base font-extrabold font-mono text-slate-900">{formatCLP(computedContributed)}</span>
-        </div>
-        <div className="bg-white p-3 rounded-xl border border-slate-200">
-          <span className="text-[10px] text-slate-400 block leading-tight">Mercado</span>
+          <span className="text-[10px] text-slate-400 block leading-tight mt-1.5">Mercado</span>
           <span className="text-base font-extrabold font-mono text-indigo-600">{formatCLP(computedCurrentValue)}</span>
         </div>
         <div className="bg-white p-3 rounded-xl border border-slate-200">
@@ -642,14 +657,10 @@ export default function ChartsAndAnalytics({
           <span className="text-base font-extrabold font-mono text-emerald-600">{generatedYieldPercent.toFixed(1)}%</span>
         </div>
 
+        {/* Hoy */}
         <div className="bg-white p-3 rounded-xl border border-slate-200">
-          <span className="text-[10px] text-slate-400 block leading-tight">Posiciones</span>
-          <span className="text-base font-extrabold font-mono text-slate-900">{listHoldings.length}</span>
-        </div>
-        <div className="bg-white p-3 rounded-xl border border-slate-200">
-          <span className="text-[10px] text-slate-400 block leading-tight">IPSA vs Cartera</span>
-          <div className="text-[9px] text-slate-400 font-semibold mt-0.5 mb-0.5">Hoy</div>
-          <div className="flex items-center gap-3">
+          <span className="text-[10px] text-slate-400 block leading-tight">Hoy</span>
+          <div className="flex items-center gap-3 mt-1">
             <span className="text-[11px] font-semibold font-mono text-slate-500">IPSA</span>
             <span className={`text-sm font-extrabold font-mono ${ipsaDailyChange !== null && ipsaDailyChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {ipsaDailyChange !== null ? `${ipsaDailyChange >= 0 ? '+' : ''}${ipsaDailyChange.toFixed(2)}%` : ipsaLoading ? '...' : '—'}
@@ -667,8 +678,12 @@ export default function ChartsAndAnalytics({
               return <span className="text-[10px] text-slate-400">—</span>;
             })()}
           </div>
-          <div className="text-[9px] text-slate-400 font-semibold mt-1 mb-0.5">Este Mes</div>
-          <div className="flex items-center gap-3">
+        </div>
+
+        {/* Este Mes */}
+        <div className="bg-white p-3 rounded-xl border border-slate-200">
+          <span className="text-[10px] text-slate-400 block leading-tight">Este Mes</span>
+          <div className="flex items-center gap-3 mt-1">
             <span className="text-[11px] font-semibold font-mono text-slate-500">IPSA</span>
             <span className={`text-sm font-extrabold font-mono ${monthlyChange.ipsaPct !== null && monthlyChange.ipsaPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {monthlyChange.hasMonthly ? `${monthlyChange.ipsaPct! >= 0 ? '+' : ''}${monthlyChange.ipsaPct!.toFixed(2)}%` : ipsaLoading ? '...' : '—'}
@@ -682,6 +697,28 @@ export default function ChartsAndAnalytics({
             {monthlyChange.pfPct !== null && monthlyChange.ipsaPct !== null && (() => {
               if (monthlyChange.pfPct! > monthlyChange.ipsaPct!) return <span className="text-[10px] text-emerald-500 font-bold">▲</span>;
               if (monthlyChange.pfPct! < monthlyChange.ipsaPct!) return <span className="text-[10px] text-rose-500 font-bold">▼</span>;
+              return <span className="text-[10px] text-slate-400">—</span>;
+            })()}
+          </div>
+        </div>
+
+        {/* Desde Inicio */}
+        <div className="bg-white p-3 rounded-xl border border-slate-200">
+          <span className="text-[10px] text-slate-400 block leading-tight">Desde Inicio</span>
+          <div className="flex items-center gap-3 mt-1">
+            <span className="text-[11px] font-semibold font-mono text-slate-500">IPSA</span>
+            <span className={`text-sm font-extrabold font-mono ${ipsaSinceInicio !== null && ipsaSinceInicio >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {ipsaSinceInicio !== null ? `${ipsaSinceInicio >= 0 ? '+' : ''}${ipsaSinceInicio.toFixed(2)}%` : ipsaLoading ? '...' : '—'}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-semibold font-mono text-slate-500">Cartera</span>
+            <span className={`text-sm font-extrabold font-mono ${totalReturnPct !== null && totalReturnPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {totalReturnPct !== null ? `${totalReturnPct >= 0 ? '+' : ''}${totalReturnPct.toFixed(2)}%` : '—'}
+            </span>
+            {totalReturnPct !== null && ipsaSinceInicio !== null && (() => {
+              if (totalReturnPct > ipsaSinceInicio) return <span className="text-[10px] text-emerald-500 font-bold">▲</span>;
+              if (totalReturnPct < ipsaSinceInicio) return <span className="text-[10px] text-rose-500 font-bold">▼</span>;
               return <span className="text-[10px] text-slate-400">—</span>;
             })()}
           </div>
