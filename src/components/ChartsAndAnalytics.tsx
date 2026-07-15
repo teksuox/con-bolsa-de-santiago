@@ -606,10 +606,25 @@ export default function ChartsAndAnalytics({
           <span className="text-base font-extrabold font-mono text-slate-900">{listHoldings.length}</span>
         </div>
         <div className="bg-white p-3 rounded-xl border border-slate-200">
-          <span className="text-[10px] text-slate-400 block leading-tight">IPSA</span>
-          <span className={`text-base font-extrabold font-mono ${ipsaDailyChange !== null && ipsaDailyChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {ipsaDailyChange !== null ? `${ipsaDailyChange >= 0 ? '+' : ''}${ipsaDailyChange.toFixed(2)}%` : ipsaLoading ? '...' : '—'}
-          </span>
+          <span className="text-[10px] text-slate-400 block leading-tight">IPSA vs Cartera</span>
+          <div className="flex items-center gap-3 mt-0.5">
+            <span className="text-[11px] font-semibold font-mono text-slate-500">IPSA</span>
+            <span className={`text-sm font-extrabold font-mono ${ipsaDailyChange !== null && ipsaDailyChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {ipsaDailyChange !== null ? `${ipsaDailyChange >= 0 ? '+' : ''}${ipsaDailyChange.toFixed(2)}%` : ipsaLoading ? '...' : '—'}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-semibold font-mono text-slate-500">Cartera</span>
+            <span className={`text-sm font-extrabold font-mono ${dailyPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {portfolioOpenValue > 0 ? `${dailyPnL >= 0 ? '+' : ''}${((dailyPnL / portfolioOpenValue) * 100).toFixed(2)}%` : '—'}
+            </span>
+            {ipsaDailyChange !== null && portfolioOpenValue > 0 && (() => {
+              const pfPct = (dailyPnL / portfolioOpenValue) * 100;
+              if (pfPct > ipsaDailyChange) return <span className="text-[10px] text-emerald-500 font-bold">▲</span>;
+              if (pfPct < ipsaDailyChange) return <span className="text-[10px] text-rose-500 font-bold">▼</span>;
+              return <span className="text-[10px] text-slate-400">—</span>;
+            })()}
+          </div>
         </div>
       </div>
 

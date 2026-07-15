@@ -213,7 +213,10 @@ async function startServer() {
                 const latestDate = history.reduce((latest, entry) =>
                   entry.date > latest ? entry.date : latest, '');
                 // If cache covers up to at most 2 days ago, it's complete (history is immutable)
-                if (latestDate >= twoDaysAgo) {
+                // For indices (^) with < 2 entries, supplement with chartPreviousClose or re-fetch
+                if (cleanTicker.startsWith('^') && history.length < 2) {
+                  // Fall through to re-fetch to get chartPreviousClose
+                } else if (latestDate >= twoDaysAgo) {
                   return { ticker: cleanTicker, history, fromCache: true };
                 }
               }
@@ -237,6 +240,7 @@ async function startServer() {
           }
 
           let yahooHistory: { date: string; close: number }[] = [];
+          let chartPreviousClose: number | null = null;
           const yahooRange = startDateParam && endDateParam
             ? `period1=${Math.floor(new Date(startDateParam + 'T12:00:00').getTime() / 1000)}&period2=${Math.floor(new Date(endDateParam + 'T12:00:00').getTime() / 1000)}`
             : 'range=1y';
@@ -261,6 +265,16 @@ async function startServer() {
                 if (closes[i] !== null && closes[i] !== undefined) {
                   const date = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
                   yahooHistory.push({ date, close: Math.round(closes[i]! * 100) / 100 });
+                }
+              }
+              // Indices like ^IPSA often return only 1 data point; supplement with chartPreviousClose
+              if (yahooHistory.length < 2 && result?.meta?.chartPreviousClose) {
+                const prevClose = result.meta.chartPreviousClose;
+                const lastDate = yahooHistory.length > 0 ? yahooHistory[0].date : new Date().toISOString().split('T')[0];
+                const prevDate = new Date(new Date(lastDate).getTime() - 86400000).toISOString().split('T')[0];
+                if (!yahooHistory.some(e => e.date === prevDate)) {
+                  yahooHistory.push({ date: prevDate, close: Math.round(prevClose * 100) / 100 });
+                  yahooHistory.sort((a, b) => a.date.localeCompare(b.date));
                 }
               }
               if (yahooHistory.length > 0) break;
@@ -315,6 +329,15 @@ async function startServer() {
             } catch { /* cache save best-effort */ }
           }
 
+          // Supplement indices with chartPreviousClose if still < 2 entries
+          if (merged.length < 2 && chartPreviousClose && cleanTicker.startsWith('^')) {
+            const lastDate = merged.length > 0 ? merged[0].date : new Date().toISOString().split('T')[0];
+            const prevDate = new Date(new Date(lastDate).getTime() - 86400000).toISOString().split('T')[0];
+            if (!merged.some(e => e.date === prevDate)) {
+              merged.push({ date: prevDate, close: Math.round(chartPreviousClose * 100) / 100 });
+              merged.sort((a, b) => a.date.localeCompare(b.date));
+            }
+          }
           // Filter by requested date range before returning
           if (startDateParam && endDateParam) {
             const startD = startDateParam;
