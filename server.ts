@@ -893,10 +893,11 @@ async function startServer() {
   });
 
   // API: IPSA historical data from findic.cl (free, no API key needed)
-  app.get('/api/ipsa-history', async (_req, res) => {
+  app.get('/api/ipsa-history', async (req, res) => {
     try {
-      const cacheKey = 'ipsa_history_findic';
-      if (supabase) {
+      const cacheKey = 'ipsa_history_findic_v2';
+      const force = req.query.force === '1';
+      if (supabase && !force) {
         try {
           const { data: cached } = await supabase.from('market_data').select('data, updated_at').eq('key', cacheKey).single();
           if (cached?.data && Array.isArray(cached.data)) {
