@@ -181,6 +181,17 @@ export default function ChartsAndAnalytics({
           }
           ipsaPoints.sort((a, b) => a.date.localeCompare(b.date));
           setIpsaHistory(ipsaPoints);
+          // Save latest IPSA value to localStorage for daily tracking
+          if (ipsaPoints.length > 0) {
+            const latest = ipsaPoints[ipsaPoints.length - 1];
+            try {
+              const stored: { date: string; value: number }[] = JSON.parse(localStorage.getItem('ipsaDailyHistory') || '[]');
+              const existing = stored.findIndex(e => e.date === latest.date);
+              if (existing >= 0) stored[existing] = { date: latest.date, value: latest.portfolioValue };
+              else stored.push({ date: latest.date, value: latest.portfolioValue });
+              localStorage.setItem('ipsaDailyHistory', JSON.stringify(stored));
+            } catch {}
+          }
         }
       })
       .catch(() => {})
@@ -330,6 +341,27 @@ export default function ChartsAndAnalytics({
     const prev = ipsaHistory[ipsaHistory.length - 2].portfolioValue;
     if (prev <= 0) return null;
     return ((last - prev) / prev) * 100;
+  })();
+
+  // Compute monthly changes (MTD) for portfolio and IPSA
+  const monthlyChange = (() => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    // Portfolio from chartData
+    const monthEntries = chartData.filter(e => e.date >= monthStart && e.date <= getDateStr(now));
+    const pfFirst = monthEntries.length > 0 ? monthEntries[0].portfolioValue : 0;
+    const pfLast = monthEntries.length > 0 ? monthEntries[monthEntries.length - 1].portfolioValue : 0;
+    const pfPct = pfFirst > 0 ? ((pfLast - pfFirst) / pfFirst) * 100 : null;
+    // IPSA from ipsaHistory + localStorage daily tracking
+    const ipsaMonth = ipsaHistory.filter(e => e.date >= monthStart);
+    // Also load locally tracked daily values for dates not in ipsaHistory
+    let additionalIpsa: { date: string; value: number }[] = [];
+    try { additionalIpsa = JSON.parse(localStorage.getItem('ipsaDailyHistory') || '[]').filter((e: any) => e.date >= monthStart && !ipsaMonth.some((i: any) => i.date === e.date)); } catch {}
+    const allIpsa = [...ipsaMonth.map(e => ({ date: e.date, value: e.portfolioValue })), ...additionalIpsa].sort((a, b) => a.date.localeCompare(b.date));
+    const ipsaFirst = allIpsa.length > 0 ? allIpsa[0].value : 0;
+    const ipsaLast = allIpsa.length > 0 ? allIpsa[allIpsa.length - 1].value : 0;
+    const ipsaPct = ipsaFirst > 0 ? ((ipsaLast - ipsaFirst) / ipsaFirst) * 100 : null;
+    return { pfPct, ipsaPct, hasMonthly: allIpsa.length >= 2 };
   })();
 
   // Area chart SVG
@@ -602,7 +634,8 @@ export default function ChartsAndAnalytics({
         </div>
         <div className="bg-white p-3 rounded-xl border border-slate-200">
           <span className="text-[10px] text-slate-400 block leading-tight">IPSA vs Cartera</span>
-          <div className="flex items-center gap-3 mt-0.5">
+          <div className="text-[9px] text-slate-400 font-semibold mt-0.5 mb-0.5">Hoy</div>
+          <div className="flex items-center gap-3">
             <span className="text-[11px] font-semibold font-mono text-slate-500">IPSA</span>
             <span className={`text-sm font-extrabold font-mono ${ipsaDailyChange !== null && ipsaDailyChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {ipsaDailyChange !== null ? `${ipsaDailyChange >= 0 ? '+' : ''}${ipsaDailyChange.toFixed(2)}%` : ipsaLoading ? '...' : '—'}
@@ -617,6 +650,24 @@ export default function ChartsAndAnalytics({
               const pfPct = (dailyPnL / portfolioOpenValue) * 100;
               if (pfPct > ipsaDailyChange) return <span className="text-[10px] text-emerald-500 font-bold">▲</span>;
               if (pfPct < ipsaDailyChange) return <span className="text-[10px] text-rose-500 font-bold">▼</span>;
+              return <span className="text-[10px] text-slate-400">—</span>;
+            })()}
+          </div>
+          <div className="text-[9px] text-slate-400 font-semibold mt-1 mb-0.5">Este Mes</div>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-semibold font-mono text-slate-500">IPSA</span>
+            <span className={`text-sm font-extrabold font-mono ${monthlyChange.ipsaPct !== null && monthlyChange.ipsaPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {monthlyChange.hasMonthly ? `${monthlyChange.ipsaPct! >= 0 ? '+' : ''}${monthlyChange.ipsaPct!.toFixed(2)}%` : ipsaLoading ? '...' : '—'}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-semibold font-mono text-slate-500">Cartera</span>
+            <span className={`text-sm font-extrabold font-mono ${monthlyChange.pfPct !== null && monthlyChange.pfPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {monthlyChange.pfPct !== null ? `${monthlyChange.pfPct >= 0 ? '+' : ''}${monthlyChange.pfPct.toFixed(2)}%` : '—'}
+            </span>
+            {monthlyChange.pfPct !== null && monthlyChange.ipsaPct !== null && (() => {
+              if (monthlyChange.pfPct! > monthlyChange.ipsaPct!) return <span className="text-[10px] text-emerald-500 font-bold">▲</span>;
+              if (monthlyChange.pfPct! < monthlyChange.ipsaPct!) return <span className="text-[10px] text-rose-500 font-bold">▼</span>;
               return <span className="text-[10px] text-slate-400">—</span>;
             })()}
           </div>

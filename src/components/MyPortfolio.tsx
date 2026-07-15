@@ -313,11 +313,11 @@ export default function MyPortfolio({
 
         <div className="bg-white p-3 md:p-5 rounded-xl border border-slate-200 shadow-xs">
           <span className="text-[10px] md:text-xs text-slate-500 font-medium uppercase tracking-wider block">Fluctuación de Capital (Plusvalía)</span>
-          <div className="flex items-baseline space-x-2 mt-1">
+          <div className="flex items-baseline gap-1.5 md:gap-2 mt-1 flex-wrap">
             <span className={`text-base md:text-2xl font-bold font-mono ${totalGainLoss >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {totalGainLoss >= 0 ? '+' : ''}{formatCLP(totalGainLoss)}
             </span>
-            <span className={`text-[10px] md:text-xs font-semibold font-mono ${totalGainLoss >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} px-2 py-0.5 rounded-full flex items-center`}>
+            <span className={`text-[10px] md:text-xs font-semibold font-mono ${totalGainLoss >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} px-2 py-0.5 rounded-full flex items-center whitespace-nowrap`}>
               {totalGainLoss >= 0 ? <ArrowUpRight className="w-3 h-3 md:w-3.5 md:h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3 h-3 md:w-3.5 md:h-3.5 mr-0.5" />}
               {totalGainLossPercent.toFixed(2)}%
             </span>
@@ -327,11 +327,11 @@ export default function MyPortfolio({
 
         <div className="bg-white p-3 md:p-5 rounded-xl border border-slate-200 shadow-xs">
           <span className="text-[10px] md:text-xs text-slate-500 font-medium uppercase tracking-wider block">Ganancia / Pérdida del Día</span>
-          <div className="flex items-baseline space-x-2 mt-1">
+          <div className="flex items-baseline gap-1.5 md:gap-2 mt-1 flex-wrap">
             <span className={`text-base md:text-2xl font-bold font-mono ${dailyPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {dailyPnL >= 0 ? '+' : ''}{formatCLP(dailyPnL)}
             </span>
-            <span className={`text-[10px] md:text-xs font-semibold font-mono ${dailyPnL >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} px-2 py-0.5 rounded-full flex items-center`}>
+            <span className={`text-[10px] md:text-xs font-semibold font-mono ${dailyPnL >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'} px-2 py-0.5 rounded-full flex items-center whitespace-nowrap`}>
               {dailyPnL >= 0 ? '+' : ''}
               {totalCurrent > 0 ? ((dailyPnL / (totalCurrent - dailyPnL)) * 100).toFixed(2) : '0.00'}%
             </span>
