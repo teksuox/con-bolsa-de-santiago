@@ -39,7 +39,7 @@ function getFirstOfYear(d: Date): Date {
   return new Date(d.getFullYear(), 0, 1);
 }
 
-const PNL_CACHE_VERSION = 2;
+const PNL_CACHE_VERSION = 3;
 
 export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps) {
   const [filter, setFilter] = useState<DateFilter>('month');
@@ -58,8 +58,6 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
     return [];
   });
   const [isLoading, setIsLoading] = useState(false);
-  const [forceRefresh, setForceRefresh] = useState(0);
-
   const cacheRef = useRef<PnLEntry[]>(entries);
 
   const holdingsKey = useMemo(() =>
@@ -150,7 +148,7 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
 
       const holdingsChanged = holdingsKey !== lastHoldingsKeyRef.current;
       const versionChanged = typeof window !== 'undefined' && localStorage.getItem('pnlCacheVersion') !== String(PNL_CACHE_VERSION);
-      const skipCache = holdingsChanged || versionChanged || forceRefresh > 0;
+      const skipCache = holdingsChanged || versionChanged;
       let cachedEntries: MonthlyPnLEntry[] = [];
 
       // 1. Try Supabase monthly_pnl first (skip if holdings/version changed or refresh forced)
@@ -361,7 +359,7 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
 
     load();
     return () => { cancelled = true; };
-  }, [uniqueTickers, filter, customStart, customEnd, holdingsKey, forceRefresh]);
+  }, [uniqueTickers, filter, customStart, customEnd, holdingsKey]);
 
   // Total P&L for the selected period: sum of daily changes (matches grid exactly)
   const totalPnL = entries.reduce((sum, e) => sum + e.dailyPnL, 0);
@@ -391,12 +389,6 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
             {f === 'month' ? 'Mes' : f === 'year' ? 'Año' : 'Personalizado'}
           </button>
         ))}
-        <button
-          onClick={() => setForceRefresh(n => n + 1)}
-          className="px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer bg-amber-100 text-amber-700 hover:bg-amber-200 border border-amber-200 ml-auto"
-        >
-          Recalcular
-        </button>
         {filter === 'custom' && (
           <div className="flex items-center gap-2 ml-2">
             <input
