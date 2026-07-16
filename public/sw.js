@@ -69,8 +69,10 @@ self.addEventListener('fetch', (event) => {
         return response;
       })
       .catch(() => {
-        // Offline fallback
-        return caches.match(event.request);
+        // Offline fallback — return a proper Response, never undefined
+        return caches.match(event.request).then((cached) => {
+          return cached || new Response('', { status: 503, statusText: 'Service Unavailable' });
+        });
       })
   );
 });

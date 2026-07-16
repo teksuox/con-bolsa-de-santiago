@@ -144,9 +144,12 @@ export default function ChartsAndAnalytics({
     }
   }, [portfolioOpenValue]);
 
-  // Poll for new snapshots every 30s
+  // Poll for new snapshots every 30s (only during market hours)
   useEffect(() => {
     const interval = setInterval(() => {
+      const nowChile = new Date().toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/Santiago' });
+      const hourMin = parseInt(nowChile.slice(0, 2)) * 60 + parseInt(nowChile.slice(3, 5));
+      if (hourMin >= 1080) return;
       const current = loadIntradaySnapshots();
       if (current.length === 0) return;
       setIntradayData(prev => {
