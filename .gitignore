@@ -8,3 +8,5 @@ coverage/
 AGENTS*
 *backup_*.json
 *portafolio_backup*
+
+SUPABASE_AI.md
