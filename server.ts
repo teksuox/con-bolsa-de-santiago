@@ -150,13 +150,17 @@ async function startServer() {
       const backupItem = INITIAL_MARKET_STOCKS_BACKUP.find(s => s.ticker === cleanTicker);
       let companyName = cleanTicker + " S.A.";
       if (backupItem) companyName = backupItem.name;
+      const marketDate = meta.regularMarketTime
+        ? new Date(meta.regularMarketTime * 1000).toISOString().split('T')[0]
+        : new Date().toISOString().split('T')[0];
       const processedData = {
         ticker: cleanTicker, name: companyName, price: Math.round(price * 100) / 100,
         changePercent: Math.round(changePercent * 100) / 100,
         previousClose: Math.round(previousClose * 100) / 100,
         dividendYield: backupItem ? backupItem.dividendYield : 6.0,
         sector: backupItem ? backupItem.sector : "Bolsa de Santiago",
-        volumeCLP: Math.round(volumeCLP)
+        volumeCLP: Math.round(volumeCLP),
+        marketDate
       };
       stockCache[cleanTicker] = { data: processedData, timestamp: now };
       return processedData;

@@ -672,9 +672,10 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSupabaseUser(session?.user ?? null);
       prevSessionRef.current = session?.user ?? null;
-      if (session?.user) {
-        setShowLanding(false);
+      // Logged-in user on /login → go to dashboard
+      if (session?.user && window.location.pathname === '/login') {
         setShowLoginPage(false);
+        setShowLanding(false);
       }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -682,10 +683,8 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
       const current = session?.user ?? null;
       prevSessionRef.current = current;
       setSupabaseUser(current);
-      if (!current || event === 'SIGNED_OUT') {
-        setShowLoginPage(true);
-        setShowLanding(false);
-      } else if (current && !prev) {
+      // Only dismiss login when user just signed in (responds to user action)
+      if (current && !prev) {
         setShowLoginPage(false);
         setShowLanding(false);
       }
@@ -1234,8 +1233,9 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
   const totalContributed = holdings.reduce((sum, h) => sum + (h.shares * h.buyPrice), 0);
   const totalDividends = dividends.filter(d => d.received).reduce((sum, d) => sum + d.totalAmount, 0);
   const totalTaxRefunds = refunds.reduce((sum, r) => sum + r.amount, 0);
-  const dailyPnL = holdings.reduce((sum, h) => {
-    // Stocks bought today weren't in the portfolio at yesterday's close
+  // Si ningún activo tiene datos de hoy (feriado, fin de semana), el P&L es 0
+  const hasDataFromToday = marketStocks.some(s => s.marketDate === todayStr);
+  const dailyPnL = hasDataFromToday ? holdings.reduce((sum, h) => {
     if (h.buyDate && h.buyDate >= todayStr) return sum;
     const stock = marketStocks.find(s => normalizeTicker(s.ticker) === normalizeTicker(h.ticker));
     if (stock && stock.price > 0) {
@@ -1249,7 +1249,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
       }
     }
     return sum;
-  }, 0);
+  }, 0) : 0;
 
   // Portfolio value at market open (using previousClose as approximate open price)
   const portfolioOpenValue = holdings.reduce((sum, h) => {
@@ -1500,7 +1500,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
               </div>
 
               <div className={activeTab === 'history' ? '' : 'hidden'}>
-                <HistoryPage holdings={holdings} dividends={dividends} todayPnL={dailyPnL} />
+                <HistoryPage holdings={holdings} dividends={dividends} todayPnL={dailyPnL} hasDataFromToday={hasDataFromToday} />
               </div>
 
               <div className={activeTab === 'backup' ? '' : 'hidden'}>

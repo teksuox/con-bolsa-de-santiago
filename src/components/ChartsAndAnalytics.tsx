@@ -63,13 +63,23 @@ export default function ChartsAndAnalytics({
 
 
 
-  // Build intraday data: synthetic 09:30 point + real snapshots + optional Yahoo backfill
+  // Build intraday data: synthetic 09:30 point + real snapshots + Yahoo backfill
   const holdingsRef = useRef(holdings);
   holdingsRef.current = holdings;
 
   useEffect(() => {
     const snapshots = loadIntradaySnapshots();
     let data: IntradayPoint[] = [...snapshots];
+
+    if (data.length === 0 && portfolioOpenValue > 0) {
+      // Seed with a synthetic 09:30 point even without snapshots
+      data.push({
+        time: '09:30',
+        timestamp: new Date().setHours(9, 30, 0, 0),
+        portfolioValue: Math.round(portfolioOpenValue),
+        ipsaValue: 0,
+      });
+    }
 
     if (data.length > 0 && portfolioOpenValue > 0) {
       const [fh, fm] = data[0].time.split(':').map(Number);
@@ -85,14 +95,15 @@ export default function ChartsAndAnalytics({
 
     setIntradayData(data);
 
-    // Backfill missing hours from Yahoo if there's a gap
+    // Backfill gaps between snapshots from Yahoo (only when snapshots exist — Yahoo 5-min data is unreliable for Chilean stocks)
     const active = holdingsRef.current.filter(h => h.shares > 0);
     if (data.length > 1 && active.length > 0 && portfolioOpenValue > 0) {
       const gap = data[1].timestamp - data[0].timestamp;
       if (gap > 600000) {
         const tickers = [...new Set(active.map(h => h.ticker))].join(',');
-        const shares = active.map(h => h.shares);
-        fetch(`/api/intraday-prices?tickers=${encodeURIComponent(tickers)}`)
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        fetch(`/api/intraday-prices?tickers=${encodeURIComponent(tickers)}`, { signal: controller.signal })
           .then(r => r.ok ? r.json() : null)
           .then((result: any) => {
             if (!Array.isArray(result) || result.length === 0) return;
@@ -139,7 +150,8 @@ export default function ChartsAndAnalytics({
               setIntradayData([...before, ...snapshots]);
             }
           })
-          .catch(() => {});
+          .catch(() => {})
+          .finally(() => clearTimeout(timeout));
       }
     }
   }, [portfolioOpenValue]);
@@ -548,8 +560,9 @@ export default function ChartsAndAnalytics({
             <span className={`text-xs font-extrabold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {pnl >= 0 ? '+' : ''}{formatCLP(pnl)}
             </span>
-            <span className="text-[9px] text-slate-400">esperando datos...</span>
+            <span className="text-[9px] text-slate-400">cargando intradiario...</span>
           </div>
+          <div className="flex items-center justify-center h-12 text-[9px] text-slate-300">completando datos del día...</div>
         </div>
       );
     }

@@ -7,6 +7,7 @@ import { supabaseService } from '../lib/supabaseService';
 interface ProfitHistoryProps {
   holdings: StockHolding[];
   todayPnL?: number;
+  hasDataFromToday?: boolean;
 }
 
 type DateFilter = 'month' | 'year' | 'custom';
@@ -41,7 +42,7 @@ function getFirstOfYear(d: Date): Date {
 
 const PNL_CACHE_VERSION = 3;
 
-export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps) {
+export default function ProfitHistory({ holdings, todayPnL, hasDataFromToday }: ProfitHistoryProps) {
   const [filter, setFilter] = useState<DateFilter>('month');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -334,6 +335,11 @@ export default function ProfitHistory({ holdings, todayPnL }: ProfitHistoryProps
             todayEntry.dailyPnL = Math.round(todayPnL);
             todayEntry.dailyPnLPct = Math.round((prevValue > 0 ? (todayPnL / prevValue) * 100 : 0) * 100) / 100;
           }
+        }
+
+        // En feriado, eliminar la entrada de hoy para no mostrar datos stale
+        if (!hasDataFromToday) {
+          pnlEntries = pnlEntries.filter(e => e.date !== today);
         }
 
         // Save resulting entries to Supabase by month (async, fire-and-forget, skip today)

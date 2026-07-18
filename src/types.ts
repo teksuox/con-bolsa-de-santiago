@@ -47,6 +47,7 @@ export interface MarketStock {
   dividendYield: number; // Dividendo anual aproximado %
   sector: string;
   volumeCLP: number;     // Volumen diario de transacciones
+  marketDate?: string;   // Fecha del dato devuelto por Yahoo (YYYY-MM-DD)
 }
 
 export interface SectorAllocation {

@@ -7,11 +7,12 @@ interface HistoryPageProps {
   holdings: StockHolding[];
   dividends: DividendPayment[];
   todayPnL?: number;
+  hasDataFromToday?: boolean;
 }
 
 type SubTab = 'pnl' | 'dividends';
 
-export default function HistoryPage({ holdings, dividends, todayPnL }: HistoryPageProps) {
+export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFromToday }: HistoryPageProps) {
   const [subTab, setSubTab] = useState<SubTab>('pnl');
 
   return (
@@ -42,7 +43,7 @@ export default function HistoryPage({ holdings, dividends, todayPnL }: HistoryPa
 
       {/* Content */}
       {subTab === 'pnl' ? (
-        <ProfitHistory holdings={holdings} todayPnL={todayPnL} />
+        <ProfitHistory holdings={holdings} todayPnL={todayPnL} hasDataFromToday={hasDataFromToday} />
       ) : (
         <DividendHistory dividends={dividends} />
       )}
