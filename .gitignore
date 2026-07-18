@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 AGENTS*
+*backup_*.json
+*portafolio_backup*
