@@ -21,9 +21,10 @@ import { supabase } from './lib/supabase';
 import { supabaseService } from './lib/supabaseService';
 import { subscribeToChanges } from './lib/supabaseRealtime';
 import { StockHolding, DividendPayment, TaxRefund, MarketStock, StockAlert } from './types';
+import type { IntradayPoint } from './lib/intradaySnapshot';
 import { normalizeTicker } from './utils';
 import { autoSaveMissingDays } from './lib/dailySave';
-import { saveIntradaySnapshot } from './lib/intradaySnapshot';
+import { saveIntradaySnapshot, loadIntradaySnapshots } from './lib/intradaySnapshot';
 
 function dedupeCustomStocks(stocks: MarketStock[]): MarketStock[] {
   const seen = new Set<string>();
@@ -104,6 +105,7 @@ export default function App() {
 
   // Price alerts and voice/audio notifications state
   const [alerts, setAlerts] = useState<StockAlert[]>([]);
+  const [supabaseIntradayData, setSupabaseIntradayData] = useState<IntradayPoint[] | null>(null);
 
   const [firedNotificationMessages, setFiredNotificationMessages] = useState<{ id: string; ticker: string; message: string }[]>([]);
 
@@ -405,11 +407,18 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     const hourMin = parseInt(nowChile.slice(0, 2)) * 60 + parseInt(nowChile.slice(3, 5));
     if (hourMin < 570 || hourMin >= 960) return; // before 09:30 or after 16:00
     const value = holdings.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0);
-    saveIntradaySnapshot({
+    const point: IntradayPoint = {
       time: new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false }),
       timestamp: Date.now(),
       portfolioValue: Math.round(value),
       ipsaValue: 0,
+    };
+    saveIntradaySnapshot(point);
+    // Also persist to Supabase for cross-session availability
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+      supabaseService.pushIntradaySnapshots(todayDate, loadIntradaySnapshots()).catch(() => {});
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastRefreshed]);
@@ -617,6 +626,24 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
         } catch (apiErr) {
           console.warn('Could not fetch live stock quotes:', apiErr);
           setRefreshError('Error de red al obtener precios iniciales.');
+        }
+
+        // Load today's intraday snapshots from Supabase for immediate chart display
+        if (user) {
+          try {
+            const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+            const cloudSnapshots = await supabaseService.pullIntradaySnapshots(todayDate);
+            if (cloudSnapshots.length > 0) {
+              // Merge with localStorage snapshots (local wins for latest points)
+              const localSnapshots = loadIntradaySnapshots();
+              const tsSet = new Set(localSnapshots.map(p => p.timestamp));
+              const merged = [...localSnapshots, ...cloudSnapshots.filter(p => !tsSet.has(p.timestamp))]
+                .sort((a, b) => a.timestamp - b.timestamp);
+              setSupabaseIntradayData(merged);
+            }
+          } catch (e) {
+            console.warn('Error loading intraday from Supabase:', e);
+          }
         }
 
         // Auto trigger dividend sync if user has holdings and no dividends
@@ -1435,6 +1462,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
                   dailyPnL={dailyPnL}
                   sectorAllocation={sectorAllocation}
                   portfolioOpenValue={portfolioOpenValue}
+                  supabaseIntradayData={supabaseIntradayData}
                 />
               </div>
 

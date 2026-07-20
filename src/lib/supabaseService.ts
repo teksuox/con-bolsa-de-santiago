@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import type { StockHolding, DividendPayment, TaxRefund, StockAlert, MarketStock } from '../types';
 import type { MonthlyPnLEntry } from './supabase';
+import type { IntradayPoint } from './intradaySnapshot';
 
 // ── Field conversion helpers ──
 
@@ -243,15 +244,42 @@ export const supabaseService = {
     if (error) console.warn('Error saving monthly P&L:', error.message);
   },
 
+  // Intraday snapshots
+  async pullIntradaySnapshots(date: string): Promise<IntradayPoint[]> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
+    const { data, error } = await supabase
+      .from('intraday_snapshots')
+      .select('data')
+      .eq('user_id', user.id)
+      .eq('date', date)
+      .maybeSingle();
+    if (error || !data) return [];
+    return data.data as IntradayPoint[];
+  },
+
+  async pushIntradaySnapshots(date: string, points: IntradayPoint[]): Promise<void> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || points.length === 0) return;
+    const { error } = await supabase.from('intraday_snapshots').upsert(
+      { user_id: user.id, date, data: points, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,date' }
+    );
+    if (error) console.warn('Error saving intraday snapshots:', error.message);
+  },
+
   // Full backup / restore
   async exportBackup() {
     const all = await this.pullAll();
     const { data: { user } } = await supabase.auth.getUser();
     // Also fetch PnL months
-    const { data: pnlRows } = await supabase.from('monthly_pnl').select('month, data').eq('user_id', user!.id);
+      const { data: pnlRows } = await supabase.from('monthly_pnl').select('month, data').eq('user_id', user!.id);
     const pnls: Record<string, MonthlyPnLEntry[]> = {};
     for (const r of pnlRows || []) pnls[r.month] = r.data as MonthlyPnLEntry[];
-    return { ...all, monthlyPnl: pnls };
+    const { data: intradayRows } = await supabase.from('intraday_snapshots').select('date, data').eq('user_id', user!.id);
+    const intraday: Record<string, IntradayPoint[]> = {};
+    for (const r of intradayRows || []) intraday[r.date] = r.data as IntradayPoint[];
+    return { ...all, monthlyPnl: pnls, intradaySnapshots: intraday };
   },
 
   async importBackup(data: any) {
@@ -270,11 +298,16 @@ export const supabaseService = {
         await this.saveMonthlyPnL(month, entries as MonthlyPnLEntry[]);
       }
     }
+    if (data.intradaySnapshots) {
+      for (const [date, points] of Object.entries(data.intradaySnapshots)) {
+        await this.pushIntradaySnapshots(date, points as IntradayPoint[]);
+      }
+    }
   },
 
   async clearAllData() {
     const uid = await userIdOrThrow();
-    const tables = ['holdings', 'dividends', 'refunds', 'alerts', 'custom_stocks', 'settings', 'investment_plans', 'monthly_pnl'];
+    const tables = ['holdings', 'dividends', 'refunds', 'alerts', 'custom_stocks', 'settings', 'investment_plans', 'monthly_pnl', 'intraday_snapshots'];
     for (const t of tables) {
       const { error } = await supabase.from(t).delete().eq('user_id', uid);
       if (error) console.warn(`Error clearing ${t}:`, error.message);

@@ -17,6 +17,7 @@ interface ChartsAndAnalyticsProps {
   dailyPnL: number;
   sectorAllocation?: SectorAllocation[];
   portfolioOpenValue?: number;
+  supabaseIntradayData?: IntradayPoint[] | null;
 }
 
 interface ChartEntry {
@@ -48,6 +49,7 @@ export default function ChartsAndAnalytics({
   dailyPnL,
   sectorAllocation = [],
   portfolioOpenValue = 0,
+  supabaseIntradayData,
 }: ChartsAndAnalyticsProps) {
   const [chartRange, setChartRange] = useState<ChartRange>('month');
   const [chartData, setChartData] = useState<ChartEntry[]>([]);
@@ -68,8 +70,18 @@ export default function ChartsAndAnalytics({
   holdingsRef.current = holdings;
 
   useEffect(() => {
-    const snapshots = loadIntradaySnapshots();
-    let data: IntradayPoint[] = [...snapshots];
+    // Start with Supabase data (persistent, cross-session) merged with localStorage (latest points)
+    const localSnapshots = loadIntradaySnapshots();
+    let data: IntradayPoint[];
+
+    if (supabaseIntradayData && supabaseIntradayData.length > 0) {
+      // Merge: Supabase + localStorage, localStorage wins for matching timestamps
+      const localTs = new Set(localSnapshots.map(p => p.timestamp));
+      data = [...supabaseIntradayData.filter(p => !localTs.has(p.timestamp)), ...localSnapshots]
+        .sort((a, b) => a.timestamp - b.timestamp);
+    } else {
+      data = [...localSnapshots];
+    }
 
     if (data.length === 0 && portfolioOpenValue > 0) {
       // Seed with a synthetic 09:30 point even without snapshots
@@ -134,7 +146,7 @@ export default function ChartsAndAnalytics({
             if (sorted.length === 0) return;
             // Normalize: shift all yahoo values so first complete one matches portfolioOpenValue
             const firstYahooVal = sorted[0][1];
-            const cutoff = snapshots[0]?.timestamp ?? Infinity;
+            const cutoff = localSnapshots[0]?.timestamp ?? Infinity;
             const before: IntradayPoint[] = [];
             for (const [ts, val] of sorted) {
               if (ts >= cutoff) break;
@@ -147,14 +159,14 @@ export default function ChartsAndAnalytics({
               });
             }
             if (before.length > 0) {
-              setIntradayData([...before, ...snapshots]);
+              setIntradayData([...before, ...localSnapshots]);
             }
           })
           .catch(() => {})
           .finally(() => clearTimeout(timeout));
       }
     }
-  }, [portfolioOpenValue]);
+  }, [portfolioOpenValue, supabaseIntradayData]);
 
   // Poll for new snapshots every 30s (only during market hours)
   useEffect(() => {
