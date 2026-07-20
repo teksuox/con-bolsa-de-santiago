@@ -955,18 +955,22 @@ async function startServer() {
   });
 
   // ── Background worker: intraday snapshots every 3 min during market hours ──
-  (async function startIntradayWorker() {
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-    const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
-    const supabaseUser = process.env.SUPABASE_USER || '';
-    const supabasePass = process.env.SUPABASE_PASS || '';
+  try {
+    (async function startIntradayWorker() {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+      const supabaseUser = process.env.SUPABASE_USER || '';
+      const supabasePass = process.env.SUPABASE_PASS || '';
 
-    if (!supabaseUrl || !supabaseAnonKey || !supabaseUser || !supabasePass) {
-      console.log('[IntradayWorker] Missing credentials, skipping');
-      return;
-    }
+      if (!supabaseUrl || !supabaseAnonKey || !supabaseUser || !supabasePass) {
+        console.log('[IntradayWorker] Missing credentials, skipping');
+        return;
+      }
 
-    const workerClient = createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: false } });
+      const workerClient = createClient(supabaseUrl, supabaseAnonKey, {
+        auth: { persistSession: false },
+        realtime: { transport: WebSocket as any },
+      });
     let workerUserId: string | null = null;
 
     async function ensureAuth(): Promise<boolean> {
@@ -1074,6 +1078,9 @@ async function startServer() {
       console.log('[IntradayWorker] Started — polling every 3 min 09:30–16:00 CLT');
     }, 5000);
   })();
+  } catch (e: any) {
+    console.error('[IntradayWorker] Init error:', e?.message || e);
+  }
 
   // Graceful shutdown for Docker
   const shutdown = () => {

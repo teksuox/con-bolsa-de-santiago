@@ -15,4 +15,6 @@ services:
       - NODE_ENV=production
       - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
       - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+      - SUPABASE_USER=${SUPABASE_USER}
+      - SUPABASE_PASS=${SUPABASE_PASS}
     restart: unless-stopped
