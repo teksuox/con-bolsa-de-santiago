@@ -954,6 +954,127 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 
+  // ── Background worker: intraday snapshots every 3 min during market hours ──
+  (async function startIntradayWorker() {
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+    const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+    const supabaseUser = process.env.SUPABASE_USER || '';
+    const supabasePass = process.env.SUPABASE_PASS || '';
+
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseUser || !supabasePass) {
+      console.log('[IntradayWorker] Missing credentials, skipping');
+      return;
+    }
+
+    const workerClient = createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: false } });
+    let workerUserId: string | null = null;
+
+    async function ensureAuth(): Promise<boolean> {
+      if (workerUserId) return true;
+      try {
+        const { error: signInError } = await workerClient.auth.signInWithPassword({
+          email: supabaseUser,
+          password: supabasePass,
+        });
+        if (signInError) { console.error('[IntradayWorker] SignIn error:', signInError.message); return false; }
+        const { data: { user } } = await workerClient.auth.getUser();
+        if (!user) return false;
+        workerUserId = user.id;
+        console.log('[IntradayWorker] Authenticated as', supabaseUser, 'userId:', workerUserId);
+        return true;
+      } catch (e: any) {
+        console.error('[IntradayWorker] Auth exception:', e?.message);
+        return false;
+      }
+    }
+
+    function getCLTDate(): string {
+      return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+    }
+    function getCLTTime(): string {
+      return new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false });
+    }
+    function getCLTHourMin(): { h: number; m: number } {
+      const t = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Santiago' });
+      const [h, m] = t.split(':').map(Number);
+      return { h, m };
+    }
+
+    async function collectSnapshot() {
+      const todayStr = getCLTDate();
+      const nowTime = getCLTTime();
+      const { h, m } = getCLTHourMin();
+      const totalMin = h * 60 + m;
+      // Market hours: 09:30 – 16:00 CLT
+      if (totalMin < 9 * 60 + 30 || totalMin >= 16 * 60) return;
+
+      if (!(await ensureAuth())) return;
+
+      try {
+        const { data: holdings, error: hErr } = await workerClient
+          .from('holdings')
+          .select('ticker, shares');
+        if (hErr || !holdings || holdings.length === 0) return;
+
+        const prices = await Promise.all(
+          holdings.map((h: any) => fetchStockFromYahooChart(h.ticker).catch(() => null))
+        );
+
+        let portfolioValue = 0;
+        for (let i = 0; i < holdings.length; i++) {
+          if (prices[i]?.price) portfolioValue += (holdings[i].shares ?? 0) * prices[i].price;
+        }
+        if (portfolioValue === 0) return;
+        portfolioValue = Math.round(portfolioValue * 100) / 100;
+
+        const now = Date.now();
+        const snapshot: { time: string; timestamp: number; portfolioValue: number; ipsaValue: number } = {
+          time: nowTime,
+          timestamp: now,
+          portfolioValue,
+          ipsaValue: 0,
+        };
+
+        // Get existing snapshots for today
+        const { data: existing } = await workerClient
+          .from('intraday_snapshots')
+          .select('data')
+          .eq('user_id', workerUserId!)
+          .eq('date', todayStr)
+          .maybeSingle();
+
+        let allSnapshots: any[] = existing?.data || [];
+
+        // Avoid duplicate within 90s
+        if (allSnapshots.some((s: any) => Math.abs(s.timestamp - now) < 90000)) return;
+
+        allSnapshots.push(snapshot);
+        allSnapshots.sort((a: any, b: any) => a.timestamp - b.timestamp);
+
+        // Deduplicate by timestamp
+        const unique = allSnapshots.filter((s: any, idx: number, arr: any[]) =>
+          idx === 0 || Math.abs(s.timestamp - arr[idx - 1].timestamp) > 30000
+        );
+
+        await workerClient.from('intraday_snapshots').upsert(
+          { user_id: workerUserId!, date: todayStr, data: unique },
+          { onConflict: 'user_id,date' }
+        );
+
+        console.log(`[IntradayWorker] ${nowTime} → $${portfolioValue.toLocaleString('es-CL')} (${unique.length} pts)`);
+      } catch (err: any) {
+        console.error('[IntradayWorker] Error:', err?.message || err);
+      }
+    }
+
+    // Give server a moment to start, then begin polling
+    setTimeout(() => {
+      collectSnapshot();
+      setInterval(collectSnapshot, 3 * 60 * 1000);
+      console.log('[IntradayWorker] Started — polling every 3 min 09:30–16:00 CLT');
+    }, 5000);
+  })();
+
   // Graceful shutdown for Docker
   const shutdown = () => {
     console.log('Shutting down gracefully...');
