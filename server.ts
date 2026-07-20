@@ -1011,6 +1011,10 @@ async function startServer() {
       try {
         const todayStr = getCLTDate();
         const nowTime = getCLTTime();
+        // Solo días hábiles (lun–vie) — Bolsa de Santiago cierra fines de semana y feriados
+        const dow = new Date().toLocaleDateString('en-US', { weekday: 'short', timeZone: 'America/Santiago' });
+        if (dow === 'Sat' || dow === 'Sun') return;
+
         const { h, m } = getCLTHourMin();
         const totalMin = h * 60 + m;
         // Market hours: 09:30 – 18:30 CLT (Yahoo envía últimos datos al cierre)
@@ -1027,6 +1031,13 @@ async function startServer() {
         const prices = await Promise.all(
           holdings.map((h: any) => fetchStockFromYahooChart(h.ticker).catch(() => null))
         );
+
+        // Detectar feriado: si ningún precio tiene marketDate = hoy, Yahoo devolvió datos stale
+        const hasFreshData = prices.some((p: any) => p?.marketDate === todayStr);
+        if (!hasFreshData) {
+          console.log(`[IntradayWorker] ${nowTime} — feriado detectado (marketDate != ${todayStr}), saltando`);
+          return;
+        }
 
         let portfolioValue = 0;
         for (let i = 0; i < holdings.length; i++) {
