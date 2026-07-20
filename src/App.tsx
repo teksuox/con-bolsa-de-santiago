@@ -415,10 +415,10 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     };
     saveIntradaySnapshot(point);
     // Also persist to Supabase for cross-session availability
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session?.user) return;
       const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
-      supabaseService.pushIntradaySnapshots(todayDate, loadIntradaySnapshots()).catch(() => {});
+      supabaseService.pushIntradaySnapshots(todayDate, loadIntradaySnapshots()).catch(err => console.warn('Push snapshots error:', err));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastRefreshed]);

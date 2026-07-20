@@ -971,24 +971,24 @@ async function startServer() {
         auth: { persistSession: false },
         realtime: { transport: WebSocket as any },
       });
+    let snapshotLock = false;
     let workerUserId: string | null = null;
 
-    async function ensureAuth(): Promise<boolean> {
-      if (workerUserId) return true;
+    async function getUserId(): Promise<string | null> {
+      // Sign in every time to avoid stale session issues
       try {
-        const { error: signInError } = await workerClient.auth.signInWithPassword({
+        const { error } = await workerClient.auth.signInWithPassword({
           email: supabaseUser,
           password: supabasePass,
         });
-        if (signInError) { console.error('[IntradayWorker] SignIn error:', signInError.message); return false; }
+        if (error) { console.error('[IntradayWorker] SignIn error:', error.message); return null; }
         const { data: { user } } = await workerClient.auth.getUser();
-        if (!user) return false;
+        if (!user) return null;
         workerUserId = user.id;
-        console.log('[IntradayWorker] Authenticated as', supabaseUser, 'userId:', workerUserId);
-        return true;
+        return user.id;
       } catch (e: any) {
         console.error('[IntradayWorker] Auth exception:', e?.message);
-        return false;
+        return null;
       }
     }
 
@@ -1005,16 +1005,20 @@ async function startServer() {
     }
 
     async function collectSnapshot() {
-      const todayStr = getCLTDate();
-      const nowTime = getCLTTime();
-      const { h, m } = getCLTHourMin();
-      const totalMin = h * 60 + m;
-      // Market hours: 09:30 – 16:00 CLT
-      if (totalMin < 9 * 60 + 30 || totalMin >= 16 * 60) return;
-
-      if (!(await ensureAuth())) return;
+      if (snapshotLock) return;
+      snapshotLock = true;
 
       try {
+        const todayStr = getCLTDate();
+        const nowTime = getCLTTime();
+        const { h, m } = getCLTHourMin();
+        const totalMin = h * 60 + m;
+        // Market hours: 09:30 – 18:00 CLT
+        if (totalMin < 9 * 60 + 30 || totalMin >= 18 * 60) return;
+
+        const uid = await getUserId();
+        if (!uid) return;
+
         const { data: holdings, error: hErr } = await workerClient
           .from('holdings')
           .select('ticker, shares');
@@ -1030,8 +1034,21 @@ async function startServer() {
         }
         if (portfolioValue === 0) return;
         portfolioValue = Math.round(portfolioValue * 100) / 100;
-
         const now = Date.now();
+
+        // Get existing snapshots for today
+        const { data: existing } = await workerClient
+          .from('intraday_snapshots')
+          .select('data')
+          .eq('user_id', uid)
+          .eq('date', todayStr)
+          .maybeSingle();
+
+        let allSnapshots: any[] = existing?.data || [];
+
+        // Avoid duplicate within 90s of last snapshot
+        if (allSnapshots.length > 0 && Math.abs(now - allSnapshots[allSnapshots.length - 1].timestamp) < 90000) return;
+
         const snapshot: { time: string; timestamp: number; portfolioValue: number; ipsaValue: number } = {
           time: nowTime,
           timestamp: now,
@@ -1039,43 +1056,26 @@ async function startServer() {
           ipsaValue: 0,
         };
 
-        // Get existing snapshots for today
-        const { data: existing } = await workerClient
-          .from('intraday_snapshots')
-          .select('data')
-          .eq('user_id', workerUserId!)
-          .eq('date', todayStr)
-          .maybeSingle();
-
-        let allSnapshots: any[] = existing?.data || [];
-
-        // Avoid duplicate within 90s
-        if (allSnapshots.some((s: any) => Math.abs(s.timestamp - now) < 90000)) return;
-
         allSnapshots.push(snapshot);
         allSnapshots.sort((a: any, b: any) => a.timestamp - b.timestamp);
 
-        // Deduplicate by timestamp
-        const unique = allSnapshots.filter((s: any, idx: number, arr: any[]) =>
-          idx === 0 || Math.abs(s.timestamp - arr[idx - 1].timestamp) > 30000
-        );
-
         await workerClient.from('intraday_snapshots').upsert(
-          { user_id: workerUserId!, date: todayStr, data: unique },
+          { user_id: uid, date: todayStr, data: allSnapshots },
           { onConflict: 'user_id,date' }
         );
 
-        console.log(`[IntradayWorker] ${nowTime} → $${portfolioValue.toLocaleString('es-CL')} (${unique.length} pts)`);
+        console.log(`[IntradayWorker] ${nowTime} → $${portfolioValue.toLocaleString('es-CL')} (${allSnapshots.length} pts)`);
       } catch (err: any) {
         console.error('[IntradayWorker] Error:', err?.message || err);
+      } finally {
+        snapshotLock = false;
       }
     }
 
-    // Give server a moment to start, then begin polling
     setTimeout(() => {
       collectSnapshot();
       setInterval(collectSnapshot, 3 * 60 * 1000);
-      console.log('[IntradayWorker] Started — polling every 3 min 09:30–16:00 CLT');
+      console.log('[IntradayWorker] Started — polling every 3 min 09:30–18:00 CLT');
     }, 5000);
   })();
   } catch (e: any) {

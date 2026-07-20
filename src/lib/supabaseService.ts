@@ -259,10 +259,10 @@ export const supabaseService = {
   },
 
   async pushIntradaySnapshots(date: string, points: IntradayPoint[]): Promise<void> {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user || points.length === 0) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user || points.length === 0) return;
     const { error } = await supabase.from('intraday_snapshots').upsert(
-      { user_id: user.id, date, data: points, updated_at: new Date().toISOString() },
+      { user_id: session.user.id, date, data: points, updated_at: new Date().toISOString() },
       { onConflict: 'user_id,date' }
     );
     if (error) console.warn('Error saving intraday snapshots:', error.message);
