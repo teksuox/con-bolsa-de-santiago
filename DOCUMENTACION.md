@@ -161,6 +161,7 @@ React 19, TypeScript, Vite 6, Tailwind CSS v4, Express.js, Supabase (PostgreSQL 
 | `settings` | `user_id` | Configuración (annualPerformancePercent) |
 | `monthly_pnl` | `(user_id, month)` | Datos P&L por mes en JSONB |
 | `investment_plans` | `user_id` | Plan de inversión en JSONB |
+| `intraday_snapshots` | `(user_id, date)` | Snapshots intradiarios (JSONB) |
 | `market_data` | `key` | Caché del servidor (sin RLS) |
 
 Todas las tablas de usuario tienen RLS con política `user_id = auth.uid()` y Realtime habilitado.
