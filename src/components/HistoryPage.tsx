@@ -12,6 +12,7 @@ interface HistoryPageProps {
   dividends: DividendPayment[];
   todayPnL?: number;
   hasDataFromToday?: boolean;
+  portfolioOpenValue?: number;
 }
 
 type SubTab = 'pnl' | 'dividends' | 'intraday';
@@ -20,10 +21,21 @@ function getDateStr(d: Date): string {
   return d.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
 }
 
-function renderIntradayChart(data: IntradayPoint[], dateLabel: string) {
-  if (data.length < 1) return (
+function renderIntradayChart(rawData: IntradayPoint[], dateLabel: string, portfolioOpenValue?: number) {
+  if (rawData.length < 1) return (
     <div className="flex items-center justify-center h-24 text-[9px] text-slate-400">Sin datos intradiarios para esta fecha</div>
   );
+  // Prepend synthetic 09:30 point if first snapshot is after open
+  let data = rawData;
+  if (portfolioOpenValue && portfolioOpenValue > 0) {
+    const [fh, fm] = rawData[0].time.split(':').map(Number);
+    if (fh > 9 || (fh === 9 && fm > 30)) {
+      data = [
+        { time: '09:30', timestamp: new Date(rawData[0].timestamp).setHours(9, 30, 0, 0), portfolioValue: Math.round(portfolioOpenValue), ipsaValue: 0 },
+        ...rawData,
+      ];
+    }
+  }
   const openVal = data[0].portfolioValue;
   const lastVal = data[data.length - 1].portfolioValue;
   const pnl = lastVal - openVal;
@@ -135,14 +147,14 @@ function renderIntradayChart(data: IntradayPoint[], dateLabel: string) {
         <span className={`text-sm font-bold font-mono ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
           ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
         </span>
-        <span className="text-xs text-slate-400">{dateLabel}, {data.length}pts</span>
+        <span className="text-xs text-slate-400">{dateLabel}, {rawData.length}pts originales, {data.length}pts total</span>
       </div>
       <HoverChart />
     </div>
   );
 }
 
-export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFromToday }: HistoryPageProps) {
+export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFromToday, portfolioOpenValue }: HistoryPageProps) {
   const [subTab, setSubTab] = useState<SubTab>('pnl');
   const [selectedDate, setSelectedDate] = useState(() => getDateStr(new Date()));
   const [intradayHistory, setIntradayHistory] = useState<IntradayPoint[]>([]);
@@ -158,6 +170,7 @@ export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFrom
 
   const todayStr = getDateStr(new Date());
   const dateLabel = selectedDate === todayStr ? 'hoy' : selectedDate;
+  const openForChart = selectedDate === todayStr ? portfolioOpenValue : undefined;
 
   return (
     <div className="space-y-4">
@@ -219,7 +232,7 @@ export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFrom
           {loadingIntraday ? (
             <div className="flex items-center justify-center h-24 text-xs text-slate-400">Cargando...</div>
           ) : (
-            renderIntradayChart(intradayHistory, dateLabel)
+            renderIntradayChart(intradayHistory, dateLabel, openForChart)
           )}
         </div>
       ) : (

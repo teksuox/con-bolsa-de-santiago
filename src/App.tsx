@@ -1529,7 +1529,7 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
               </div>
 
               <div className={activeTab === 'history' ? '' : 'hidden'}>
-                <HistoryPage holdings={holdings} dividends={dividends} todayPnL={dailyPnL} hasDataFromToday={hasDataFromToday} />
+                <HistoryPage holdings={holdings} dividends={dividends} todayPnL={dailyPnL} hasDataFromToday={hasDataFromToday} portfolioOpenValue={portfolioOpenValue} />
               </div>
 
               <div className={activeTab === 'backup' ? '' : 'hidden'}>
