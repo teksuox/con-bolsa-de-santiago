@@ -246,12 +246,20 @@ export const supabaseService = {
 
   // Intraday snapshots
   async pullIntradaySnapshots(date: string): Promise<IntradayPoint[]> {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
+    let uid: string | null = null;
+    // Try getSession first (fast, from memory), fallback to getUser (waits for session + network)
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      uid = session.user.id;
+    } else {
+      const { data: { user } } = await supabase.auth.getUser();
+      uid = user?.id ?? null;
+    }
+    if (!uid) return [];
     const { data, error } = await supabase
       .from('intraday_snapshots')
       .select('data')
-      .eq('user_id', user.id)
+      .eq('user_id', uid)
       .eq('date', date)
       .maybeSingle();
     if (error || !data) return [];
@@ -259,10 +267,18 @@ export const supabaseService = {
   },
 
   async pushIntradaySnapshots(date: string, points: IntradayPoint[]): Promise<void> {
+    if (points.length === 0) return;
+    let uid: string | null = null;
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user || points.length === 0) return;
+    if (session?.user) {
+      uid = session.user.id;
+    } else {
+      const { data: { user } } = await supabase.auth.getUser();
+      uid = user?.id ?? null;
+    }
+    if (!uid) return;
     const { error } = await supabase.from('intraday_snapshots').upsert(
-      { user_id: session.user.id, date, data: points, updated_at: new Date().toISOString() },
+      { user_id: uid, date, data: points, updated_at: new Date().toISOString() },
       { onConflict: 'user_id,date' }
     );
     if (error) console.warn('Error saving intraday snapshots:', error.message);
