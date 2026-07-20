@@ -1013,8 +1013,8 @@ async function startServer() {
         const nowTime = getCLTTime();
         const { h, m } = getCLTHourMin();
         const totalMin = h * 60 + m;
-        // Market hours: 09:30 – 18:00 CLT
-        if (totalMin < 9 * 60 + 30 || totalMin >= 18 * 60) return;
+        // Market hours: 09:30 – 18:30 CLT (Yahoo envía últimos datos al cierre)
+        if (totalMin < 9 * 60 + 30 || totalMin >= 18 * 60 + 30) return;
 
         const uid = await getUserId();
         if (!uid) return;
@@ -1049,6 +1049,9 @@ async function startServer() {
         // Avoid duplicate within 90s of last snapshot
         if (allSnapshots.length > 0 && Math.abs(now - allSnapshots[allSnapshots.length - 1].timestamp) < 90000) return;
 
+        // Skip if value hasn't changed from last snapshot
+        if (allSnapshots.length > 0 && allSnapshots[allSnapshots.length - 1].portfolioValue === portfolioValue) return;
+
         const snapshot: { time: string; timestamp: number; portfolioValue: number; ipsaValue: number } = {
           time: nowTime,
           timestamp: now,
@@ -1075,7 +1078,7 @@ async function startServer() {
     setTimeout(() => {
       collectSnapshot();
       setInterval(collectSnapshot, 3 * 60 * 1000);
-      console.log('[IntradayWorker] Started — polling every 3 min 09:30–18:00 CLT');
+      console.log('[IntradayWorker] Started — polling every 3 min 09:30–18:30 CLT');
     }, 5000);
   })();
   } catch (e: any) {

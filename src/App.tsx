@@ -399,22 +399,23 @@ const standardTickers = ["CHILE", "SQM-B", "ENELCHILE", "CENCOSHOP", "COPEC", "V
     localStorage.setItem('nextRefreshTime', String(nextRefreshTime));
   }, [nextRefreshTime]);
 
-  // Capture intraday snapshot whenever market data refreshes
+  // Capture intraday snapshot whenever market data refreshes, and push to Supabase always
   useEffect(() => {
     if (holdings.length === 0 || !marketDataLoadedRef.current) return;
-    // Chilean market hours: 09:30 - 16:00. Only save snapshots within that window.
+    // Save to localStorage only within market hours (09:30–18:00)
     const nowChile = new Date().toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/Santiago' });
     const hourMin = parseInt(nowChile.slice(0, 2)) * 60 + parseInt(nowChile.slice(3, 5));
-    if (hourMin < 570 || hourMin >= 960) return; // before 09:30 or after 16:00
-    const value = holdings.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0);
-    const point: IntradayPoint = {
-      time: new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false }),
-      timestamp: Date.now(),
-      portfolioValue: Math.round(value),
-      ipsaValue: 0,
-    };
-    saveIntradaySnapshot(point);
-    // Also persist to Supabase for cross-session availability
+    if (hourMin >= 570 && hourMin < 1080) {
+      const value = holdings.reduce((sum, h) => sum + (h.shares * h.currentPrice), 0);
+      const point: IntradayPoint = {
+        time: new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago', hour12: false }),
+        timestamp: Date.now(),
+        portfolioValue: Math.round(value),
+        ipsaValue: 0,
+      };
+      saveIntradaySnapshot(point);
+    }
+    // Push to Supabase regardless of time (so history page always has data)
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session?.user) return;
       const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
