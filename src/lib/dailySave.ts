@@ -67,8 +67,8 @@ export async function autoSaveMissingDays(holdings: StockHolding[]): Promise<voi
   }
   if (!allDates.has(yesterdayStr)) return;
 
-  // Compute portfolio values for the needed dates (just yesterday and the day before)
-  // Use last known price to fill gaps
+  // Compute portfolio values using last known price to fill gaps
+  const lastKnownPrice = new Map<string, number>();
   const computeVal = (date: string): number => {
     let val = 0;
     for (const h of holdings) {
@@ -76,7 +76,13 @@ export async function autoSaveMissingDays(holdings: StockHolding[]): Promise<voi
       const priceMap = tickerPrices.get(h.ticker);
       if (!priceMap) continue;
       const close = priceMap.get(date);
-      if (close != null && close > 0) val += h.shares * close;
+      if (close != null && close > 0) {
+        val += h.shares * close;
+        lastKnownPrice.set(h.ticker, close);
+      } else {
+        const fallback = lastKnownPrice.get(h.ticker);
+        if (fallback != null) val += h.shares * fallback;
+      }
     }
     return val;
   };
