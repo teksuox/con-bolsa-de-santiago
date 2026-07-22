@@ -905,7 +905,10 @@ async function startServer() {
         try {
           const { data: cached } = await supabase.from('market_data').select('data, updated_at').eq('key', cacheKey).single();
           if (cached?.data && Array.isArray(cached.data)) {
-            return res.json({ history: cached.data, fromCache: true });
+            // Auto-refresh si el cache tiene más de 24 horas
+            const updated = cached.updated_at ? new Date(cached.updated_at).getTime() : 0;
+            const ageHours = (Date.now() - updated) / 3600000;
+            if (ageHours < 24) return res.json({ history: cached.data, fromCache: true });
           }
         } catch {}
       }
