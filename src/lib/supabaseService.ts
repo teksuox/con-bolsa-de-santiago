@@ -277,8 +277,19 @@ export const supabaseService = {
       uid = user?.id ?? null;
     }
     if (!uid) return;
+    // Merge con lo que ya existe en Supabase (localStorage puede tener menos datos)
+    const { data: existing } = await supabase
+      .from('intraday_snapshots')
+      .select('data')
+      .eq('user_id', uid)
+      .eq('date', date)
+      .maybeSingle();
+    const cloudPoints: IntradayPoint[] = existing?.data || [];
+    const localTs = new Set(points.map(p => p.timestamp));
+    const merged = [...cloudPoints.filter(p => !localTs.has(p.timestamp)), ...points]
+      .sort((a, b) => a.timestamp - b.timestamp);
     const { error } = await supabase.from('intraday_snapshots').upsert(
-      { user_id: uid, date, data: points, updated_at: new Date().toISOString() },
+      { user_id: uid, date, data: merged, updated_at: new Date().toISOString() },
       { onConflict: 'user_id,date' }
     );
     if (error) console.warn('Error saving intraday snapshots:', error.message);
