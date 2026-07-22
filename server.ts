@@ -1060,9 +1060,6 @@ async function startServer() {
         // Avoid duplicate within 90s of last snapshot
         if (allSnapshots.length > 0 && Math.abs(now - allSnapshots[allSnapshots.length - 1].timestamp) < 90000) return;
 
-        // Skip if value hasn't changed from last snapshot
-        if (allSnapshots.length > 0 && allSnapshots[allSnapshots.length - 1].portfolioValue === portfolioValue) return;
-
         const snapshot: { time: string; timestamp: number; portfolioValue: number; ipsaValue: number } = {
           time: nowTime,
           timestamp: now,
