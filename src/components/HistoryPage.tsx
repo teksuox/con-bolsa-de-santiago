@@ -14,6 +14,7 @@ interface HistoryPageProps {
   todayPnL?: number;
   hasDataFromToday?: boolean;
   portfolioOpenValue?: number;
+  supabaseIntradayData?: IntradayPoint[] | null;
 }
 
 type SubTab = 'pnl' | 'dividends' | 'intraday';
@@ -155,7 +156,7 @@ function renderIntradayChart(rawData: IntradayPoint[], dateLabel: string, portfo
   );
 }
 
-export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFromToday, portfolioOpenValue }: HistoryPageProps) {
+export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFromToday, portfolioOpenValue, supabaseIntradayData }: HistoryPageProps) {
   const [subTab, setSubTab] = useState<SubTab>('pnl');
   const [selectedDate, setSelectedDate] = useState(() => getDateStr(new Date()));
   const [intradayHistory, setIntradayHistory] = useState<IntradayPoint[]>([]);
@@ -164,10 +165,20 @@ export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFrom
   useEffect(() => {
     setLoadingIntraday(true);
     const todayStr = getDateStr(new Date());
+
+    if (selectedDate === todayStr && supabaseIntradayData && supabaseIntradayData.length > 0) {
+      const localData = loadIntradaySnapshots();
+      const localTs = new Set(localData.map(p => p.timestamp));
+      const merged = [...supabaseIntradayData.filter(p => !localTs.has(p.timestamp)), ...localData]
+        .sort((a, b) => a.timestamp - b.timestamp);
+      setIntradayHistory(merged);
+      setLoadingIntraday(false);
+      return;
+    }
+
     supabaseService.pullIntradaySnapshots(selectedDate)
       .then(supabaseData => {
         let merged = supabaseData || [];
-        // For today, merge localStorage snapshots (Supabase push may be delayed)
         if (selectedDate === todayStr) {
           const localData = loadIntradaySnapshots();
           if (localData.length > 0) {
@@ -180,7 +191,7 @@ export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFrom
       })
       .catch(() => setIntradayHistory([]))
       .finally(() => setLoadingIntraday(false));
-  }, [selectedDate]);
+  }, [selectedDate, supabaseIntradayData]);
 
   const todayStr = getDateStr(new Date());
   const dateLabel = selectedDate === todayStr ? 'hoy' : selectedDate;
