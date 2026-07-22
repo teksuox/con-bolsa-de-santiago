@@ -976,6 +976,8 @@ async function startServer() {
       });
     let snapshotLock = false;
     let workerUserId: string | null = null;
+    // In-memory cache: worker always appends here, never re-reads from Supabase (evita race conditions)
+    const workerCache: { [date: string]: any[] } = {};
 
     async function getUserId(): Promise<string | null> {
       // Sign in every time to avoid stale session issues
@@ -1050,15 +1052,19 @@ async function startServer() {
         portfolioValue = Math.round(portfolioValue * 100) / 100;
         const now = Date.now();
 
-        // Get existing snapshots for today
-        const { data: existing } = await workerClient
-          .from('intraday_snapshots')
-          .select('data')
-          .eq('user_id', uid)
-          .eq('date', todayStr)
-          .maybeSingle();
+        // Use in-memory cache to avoid race conditions with external writes
+        if (!workerCache[todayStr]) {
+          // First run today: seed from Supabase
+          const { data: existing } = await workerClient
+            .from('intraday_snapshots')
+            .select('data')
+            .eq('user_id', uid)
+            .eq('date', todayStr)
+            .maybeSingle();
+          workerCache[todayStr] = existing?.data || [];
+        }
 
-        let allSnapshots: any[] = existing?.data || [];
+        let allSnapshots = workerCache[todayStr];
 
         // Avoid duplicate within 90s of last snapshot
         if (allSnapshots.length > 0 && Math.abs(now - allSnapshots[allSnapshots.length - 1].timestamp) < 90000) return;
