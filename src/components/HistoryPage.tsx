@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { StockHolding, DividendPayment } from '../types';
 import type { IntradayPoint } from '../lib/intradaySnapshot';
 import { supabaseService } from '../lib/supabaseService';
+import { loadIntradaySnapshots } from '../lib/intradaySnapshot';
 import { formatCLP } from '../utils';
 import { HelpCircle, BarChart3, CalendarDays } from 'lucide-react';
 import ProfitHistory from './ProfitHistory';
@@ -162,8 +163,21 @@ export default function HistoryPage({ holdings, dividends, todayPnL, hasDataFrom
 
   useEffect(() => {
     setLoadingIntraday(true);
+    const todayStr = getDateStr(new Date());
     supabaseService.pullIntradaySnapshots(selectedDate)
-      .then(data => setIntradayHistory(data || []))
+      .then(supabaseData => {
+        let merged = supabaseData || [];
+        // For today, merge localStorage snapshots (Supabase push may be delayed)
+        if (selectedDate === todayStr) {
+          const localData = loadIntradaySnapshots();
+          if (localData.length > 0) {
+            const supabaseTs = new Set(merged.map(p => p.timestamp));
+            merged = [...merged.filter(p => !supabaseTs.has(p.timestamp)), ...localData]
+              .sort((a, b) => a.timestamp - b.timestamp);
+          }
+        }
+        setIntradayHistory(merged);
+      })
       .catch(() => setIntradayHistory([]))
       .finally(() => setLoadingIntraday(false));
   }, [selectedDate]);
